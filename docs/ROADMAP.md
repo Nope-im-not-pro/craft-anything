@@ -595,6 +595,7 @@ behind a gateway, nothing in the UI; Gemini and Kimi stay in Detect's list; no n
       (paged, bounded), effort and thinking only where the model has them,
       `model_context_window_exceeded` refits like a context error, a spend-limit 429 is billing,
       Sonnet 5.5 cache-read price
+      — claimed: Nope-im-not-pro, branch bugfix/r5.8-claude-client-refresh
 - [ ] `anthropic-version` 2023-06-01 → 2026-10-21 after one live run (decided: move after a live
       run; the body never sends `temperature`, `top_p` or `top_k`) — waits for the live check
 - [ ] A gateway on this computer is not a local model: `Locality` (local model / gateway / hosted)
