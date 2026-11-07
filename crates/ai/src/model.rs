@@ -160,6 +160,8 @@ pub enum StopReason {
     Refusal,
     PauseTurn,
     StopSequence,
+    /// The model filled its context window while answering (Claude's `model_context_window_exceeded`).
+    ContextWindow,
     Other(String),
 }
 
@@ -172,6 +174,7 @@ impl StopReason {
             "refusal" | "content_filter" => StopReason::Refusal,
             "pause_turn" => StopReason::PauseTurn,
             "stop_sequence" => StopReason::StopSequence,
+            "model_context_window_exceeded" => StopReason::ContextWindow,
             other => StopReason::Other(other.to_string()),
         }
     }
@@ -184,6 +187,7 @@ impl StopReason {
             StopReason::Refusal => "refusal",
             StopReason::PauseTurn => "pause_turn",
             StopReason::StopSequence => "stop_sequence",
+            StopReason::ContextWindow => "model_context_window_exceeded",
             StopReason::Other(s) => s,
         }
     }

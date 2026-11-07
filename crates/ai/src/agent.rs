@@ -465,6 +465,12 @@ impl AgentLoop {
                     self.emit(AgentEvent::Status { text: "The answer hit the length limit and was cut off.".into() });
                     break;
                 }
+                StopReason::ContextWindow => {
+                    self.history.push(result.message);
+                    self.record_unrun_tools(&uses);
+                    self.emit(AgentEvent::Status { text: "The answer filled the model's context window again and was cut off.".into() });
+                    break;
+                }
                 _ => {
                     self.history.push(result.message);
                     self.record_unrun_tools(&uses);
@@ -634,6 +640,37 @@ impl AgentLoop {
                 &stop,
             );
             match r {
+                // The model filled its context window while answering (#962's case, found mid-answer):
+                // its cut-off reply is dropped but paid for, room is made, and it is asked once more.
+                Ok(r) if r.stop == StopReason::ContextWindow && !refitted => {
+                    refitted = true;
+                    let (name, local) = (slot.name.clone(), slot.local);
+                    let input = r.usage.input_tokens.saturating_add(r.usage.cache_read_tokens).saturating_add(r.usage.cache_write_tokens);
+                    let cost = price::cost(&r.model, &r.usage, &self.cfg.prices, local);
+                    self.meter.add(r.usage, cost);
+                    msg_usage.add(r.usage);
+                    *msg_cost = match (*msg_cost, cost) {
+                        (Some(a), Some(b)) => Some(a + b),
+                        _ => None,
+                    };
+                    self.host.journal(
+                        "model_turn",
+                        json!({
+                            "backend": name, "model": r.model, "input_tokens": r.usage.input_tokens,
+                            "output_tokens": r.usage.output_tokens, "cache_read_tokens": r.usage.cache_read_tokens,
+                            "cache_write_tokens": r.usage.cache_write_tokens, "cost_usd": cost, "stop_reason": r.stop.as_str(),
+                            "effort": effort.as_str(),
+                        }),
+                    );
+                    let window = input.saturating_add(r.usage.output_tokens);
+                    if window > 0 {
+                        self.server_windows.insert(self.current, window);
+                        self.last_input = input;
+                        self.last_history_estimate = context::estimate_tokens(&self.history);
+                    }
+                    self.emit(AgentEvent::Status { text: format!("{name} ran out of room while answering; making room…") });
+                    continue;
+                }
                 Ok(r) => return Some(r),
                 Err(e) if e.code == ErrorCode::Cancelled => {
                     self.emit(AgentEvent::Status { text: "Stopped.".into() });
@@ -1628,6 +1665,64 @@ pub(crate) mod tests {
                 assert!(events.iter().any(|e| matches!(e, AgentEvent::TextDelta { text } if text == "done")));
             } else {
                 assert!(error.is_some_and(|r| r.contains("OLLAMA_CONTEXT_LENGTH")), "{events:?}");
+            }
+        }
+    }
+
+    /// Claude's `model_context_window_exceeded` stop: the window filled while answering. Room is made
+    /// and the model asked once more, as for a request the server refused (#962); never twice.
+    #[test]
+    fn a_reply_that_filled_the_context_window_is_fitted_and_asked_once_more() {
+        let full = || {
+            let mut r = turn(vec![Block::Text { text: "half an ans".into() }], StopReason::ContextWindow).unwrap();
+            r.usage = Usage { input_tokens: 69_000, output_tokens: 944, ..Default::default() };
+            Ok(r)
+        };
+        let answer = || turn(vec![Block::Text { text: "done".into() }], StopReason::EndTurn);
+        for (turns, fits) in [(vec![full(), answer()], true), (vec![full(), full(), answer()], false)] {
+            let dir = tempfile::tempdir().unwrap();
+            let transcript = dir.path().join("transcript.json");
+            let mut history = vec![
+                Msg::user_text("Build it"),
+                Msg { role: Speaker::Assistant, blocks: vec![Block::ToolUse { id: "old".into(), name: "look".into(), input: json!({}) }] },
+                Msg { role: Speaker::User, blocks: vec![Block::ToolResult { tool_use_id: "old".into(), content: "x".repeat(8000), is_error: false }] },
+            ];
+            for _ in 0..context::KEEP_RECENT / 2 {
+                history.push(Msg { role: Speaker::Assistant, blocks: vec![Block::Text { text: "checked".into() }] });
+                history.push(Msg::user_text("continue"));
+            }
+            context::save(&transcript, &history).unwrap();
+            let host = Arc::new(FakeHost { calls: Mutex::default(), journal: Mutex::default() });
+            let seen = Arc::new(Mutex::new(Vec::new()));
+            let model = Scripted { turns: VecDeque::from(turns), seen: seen.clone() };
+            let chain = vec![ModelSlot { name: "Claude".into(), model: Box::new(model), local: false, effort: None, max_turns: 5, context_tokens: 0 }];
+            let mut conversation = ApiConversation::start(host.clone(), chain, LoopConfig { transcript: Some(transcript), ..Default::default() }).unwrap();
+            conversation.send("continue");
+            let events = drain_until_done(&mut conversation, |_, _| {});
+            let seen = seen.lock().unwrap();
+            assert_eq!(seen.len(), 2, "asked once more, never again (fits={fits})");
+            let old = |h: &[Msg]| {
+                h.iter()
+                    .flat_map(|m| &m.blocks)
+                    .find_map(|b| match b {
+                        Block::ToolResult { tool_use_id, content, .. } if tool_use_id == "old" => Some(content.len()),
+                        _ => None,
+                    })
+                    .unwrap()
+            };
+            assert_eq!(old(&seen[0]), 8000);
+            assert!(old(&seen[1]) < 8000, "room was made before asking again");
+            assert!(!seen[1].iter().any(|m| m.text().contains("half an ans")), "the cut-off reply isn't kept");
+            assert!(events.iter().any(|e| matches!(e, AgentEvent::Status { text } if text.contains("ran out of room"))), "{events:?}");
+            let journal = host.journal.lock().unwrap();
+            assert!(journal.iter().any(|(kind, entry)| kind == "context" && entry["budget"] == 69_944 - 69_944 / 4 && entry["tokens_before"] == 69_000));
+            assert!(journal.iter().any(|(kind, entry)| kind == "model_turn" && entry["stop_reason"] == "model_context_window_exceeded"));
+            assert!(!events.iter().any(|e| matches!(e, AgentEvent::Error { .. })), "{events:?}");
+            if fits {
+                assert!(events.iter().any(|e| matches!(e, AgentEvent::TextDelta { text } if text == "done")));
+                assert!(matches!(events.last(), Some(AgentEvent::TurnDone { input_tokens: 69_010, .. })), "the dropped reply is counted: {events:?}");
+            } else {
+                assert!(events.iter().any(|e| matches!(e, AgentEvent::Status { text } if text.contains("filled the model's context window again"))));
             }
         }
     }

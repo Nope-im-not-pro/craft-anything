@@ -3,8 +3,10 @@
 
 use crate::http::{self, SseEvent};
 use crate::model::{Block, ChatModel, Delta, Effort, Msg, Speaker, Stop, StopReason, ToolDef, TurnRequest, TurnResult, Usage};
+use crate::model_info::{self, Known, ModelInfo};
 use craft_anything_evidence::{ErrorCode, ToolError};
 use serde_json::{Value, json};
+use std::time::{Duration, Instant};
 
 pub const DEFAULT_BASE: &str = "https://api.anthropic.com";
 pub const DEFAULT_MODEL: &str = "claude-opus-5-5";
@@ -29,28 +31,49 @@ pub fn effort_for(model: &str, effort: Effort) -> Effort {
     let model = model.trim().trim_start_matches("anthropic/").trim_start_matches("anthropic.");
     EFFORT_LEVELS.iter().find(|(prefix, _)| model.starts_with(prefix)).map_or(effort, |(_, levels)| effort.within(levels))
 }
+
+/// The effort level sent, judged by what the model's list entry says when we have one: none for
+/// a model that takes no effort setting, the nearest level it has otherwise, and
+/// [`effort_for`]'s table when its levels are unknown.
+pub fn effort_with(model: &str, effort: Effort, info: Option<&ModelInfo>) -> Option<Effort> {
+    match info.and_then(|i| i.efforts.as_deref()) {
+        Some([]) => None,
+        Some(levels) => Some(effort.within(&Effort::ALL).within(levels)),
+        None => Some(effort_for(model, effort)),
+    }
+}
 pub const API_VERSION: &str = "2023-06-01";
 pub const FALLBACK_BETA: &str = "server-side-fallback-2026-07-01";
 pub const MAX_TOKENS: u32 = 64_000;
 
 /// Most content blocks we track in one response.
 const MAX_BLOCKS: usize = 4096;
+/// Most pages of `/v1/models` read, and most models kept from them.
+const MAX_MODEL_PAGES: usize = 5;
+const MAX_MODELS: usize = 5000;
+/// How long a turn waits to read a model list it hasn't seen this hour.
+const TURN_LIST_WAIT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone)]
 pub struct Anthropic {
     pub base_url: String,
     pub api_key: String,
     pub model: String,
-    /// Send the server-side fallback header and body field.
+    /// Send the server-side fallback header and body field (Anthropic's own API only).
     pub fallbacks: bool,
     /// How long one streamed answer may take.
     pub stream_limit: std::time::Duration,
+    /// Before a turn, read the model list (at most once an hour, with a short deadline) to learn
+    /// which effort levels and thinking the model takes. On for Anthropic's own API.
+    pub learn_capabilities: bool,
 }
 
 impl Anthropic {
     pub fn new(base_url: Option<&str>, api_key: String, model: &str) -> Self {
+        let base_url = base_url.unwrap_or(DEFAULT_BASE).trim_end_matches('/').to_string();
         Anthropic {
-            base_url: base_url.unwrap_or(DEFAULT_BASE).trim_end_matches('/').to_string(),
+            learn_capabilities: is_anthropic_api(&base_url),
+            base_url,
             api_key,
             model: if model.is_empty() { DEFAULT_MODEL.to_string() } else { model.to_string() },
             fallbacks: true,
@@ -63,9 +86,15 @@ impl Anthropic {
         format!("{base}/v1/{path}")
     }
 
+    /// Server-side fallbacks are a beta of Anthropic's own API; Bedrock, Vertex and proxies answer
+    /// 400 to its header.
+    fn sends_fallbacks(&self) -> bool {
+        self.fallbacks && is_anthropic_api(&self.base_url)
+    }
+
     pub fn headers(&self) -> Vec<(&'static str, String)> {
         let mut h = vec![("x-api-key", self.api_key.clone()), ("anthropic-version", API_VERSION.to_string())];
-        if self.fallbacks {
+        if self.sends_fallbacks() {
             h.push(("anthropic-beta", FALLBACK_BETA.to_string()));
         }
         h
@@ -73,15 +102,26 @@ impl Anthropic {
 
     /// The request body for one streamed turn.
     pub fn body(&self, req: &TurnRequest<'_>) -> Value {
+        let info = match model_info::recall(&self.base_url, &self.model) {
+            Known::Listed(info) => info,
+            Known::NotAsked => None,
+        };
         let mut body = json!({
             "model": self.model,
             "max_tokens": req.max_tokens,
             "stream": true,
             "system": [{"type": "text", "text": req.system, "cache_control": {"type": "ephemeral"}}],
             "messages": req.messages.iter().map(message_json).collect::<Vec<_>>(),
-            "thinking": {"type": "adaptive", "display": "summarized"},
-            "output_config": {"effort": effort_for(&self.model, req.effort).as_str()},
         });
+        if let Some(m) = body.as_object_mut() {
+            // Unknown is sent as before; only a model that says it can't is spared the setting.
+            if info.as_ref().and_then(|i| i.reasoning) != Some(false) {
+                m.insert("thinking".into(), json!({"type": "adaptive", "display": "summarized"}));
+            }
+            if let Some(effort) = effort_with(&self.model, req.effort, info.as_ref()) {
+                m.insert("output_config".into(), json!({"effort": effort.as_str()}));
+            }
+        }
         if !req.tools.is_empty() {
             let n = req.tools.len();
             let tools: Vec<Value> = req
@@ -103,7 +143,7 @@ impl Anthropic {
                 m.insert("tool_choice".into(), json!({"type": "auto"}));
             }
         }
-        if self.fallbacks
+        if self.sends_fallbacks()
             && let Some(m) = body.as_object_mut()
         {
             m.insert("fallbacks".into(), json!("default"));
@@ -112,14 +152,124 @@ impl Anthropic {
     }
 
     /// Model ids available to this key.
-    pub fn list_models(&self, timeout: std::time::Duration) -> Result<Vec<String>, ToolError> {
-        let agent = http::quick_agent(timeout);
-        let v = http::get_json(&agent, "Anthropic", &self.url("models"), &self.headers())?;
-        Ok(v.get("data")
-            .and_then(Value::as_array)
-            .map(|a| a.iter().filter_map(|m| m.get("id").and_then(Value::as_str).map(str::to_string)).collect())
-            .unwrap_or_default())
+    pub fn list_models(&self, timeout: Duration) -> Result<Vec<String>, ToolError> {
+        Ok(self.list_model_info(timeout)?.into_iter().map(|m| m.id).collect())
     }
+
+    /// The models available to this key with what each can do, read page by page (at most
+    /// [`MAX_MODEL_PAGES`] pages and [`MAX_MODELS`] models, all within `timeout`). The list is
+    /// remembered for an hour so turns can shape their requests by it.
+    pub fn list_model_info(&self, timeout: Duration) -> Result<Vec<ModelInfo>, ToolError> {
+        let deadline = Instant::now().checked_add(timeout);
+        let headers = self.headers();
+        let mut models: Vec<ModelInfo> = Vec::new();
+        let mut ids = std::collections::BTreeSet::new();
+        let mut after: Option<String> = None;
+        for page_number in 0..MAX_MODEL_PAGES {
+            let left = deadline.map_or(timeout, |d| d.saturating_duration_since(Instant::now()));
+            if left.is_zero() {
+                if page_number == 0 {
+                    return Err(ToolError::new(ErrorCode::TimedOut, "Anthropic's model list took too long.").with_remediation("Try again."));
+                }
+                break;
+            }
+            let mut url = format!("{}?limit=1000", self.url("models"));
+            if let Some(id) = &after {
+                url.push_str("&after_id=");
+                url.push_str(&query_value(id));
+            }
+            let page = match http::get_json(&http::quick_agent(left), "Anthropic", &url, &headers) {
+                Ok(page) => page,
+                Err(e) if page_number == 0 => return Err(e),
+                // A later page that fails leaves the models already read.
+                Err(e) => {
+                    log::warn!("Anthropic's model list stopped after {page_number} pages: {}", e.message);
+                    break;
+                }
+            };
+            for entry in page.get("data").and_then(Value::as_array).into_iter().flatten() {
+                if models.len() >= MAX_MODELS {
+                    break;
+                }
+                if let Some(info) = model_entry(entry)
+                    && ids.insert(info.id.clone())
+                {
+                    models.push(info);
+                }
+            }
+            let next = model_info::bounded_name(page.get("last_id"));
+            match (page.get("has_more").and_then(Value::as_bool), next) {
+                (Some(true), Some(next)) if models.len() < MAX_MODELS && after.as_ref() != Some(&next) => after = Some(next),
+                _ => break,
+            }
+        }
+        model_info::remember(&self.base_url, models.clone(), model_info::LIST_TTL);
+        Ok(models)
+    }
+
+    /// Learn the model's capabilities before a turn when this hour's list hasn't been read. It
+    /// runs on the conversation's worker thread with a short deadline; a list that can't be read
+    /// is remembered as unknown for a few minutes, which sends the request as before.
+    fn learn(&self) {
+        if !self.learn_capabilities || !matches!(model_info::recall(&self.base_url, &self.model), Known::NotAsked) {
+            return;
+        }
+        if let Err(e) = self.list_model_info(TURN_LIST_WAIT) {
+            log::info!("couldn't read Anthropic's model list for its capabilities: {}", e.message);
+            model_info::remember(&self.base_url, Vec::new(), model_info::FAILED_TTL);
+        }
+    }
+}
+
+/// A query-string value with everything but unreserved characters percent-encoded.
+fn query_value(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for b in text.bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~') {
+            out.push(char::from(b));
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
+}
+
+/// One `/v1/models` entry. Anything missing, of the wrong type or implausible is unknown.
+fn model_entry(entry: &Value) -> Option<ModelInfo> {
+    let id = model_info::bounded_name(entry.get("id"))?;
+    let caps = entry.get("capabilities").filter(|c| c.is_object());
+    let supported = |path: &str| caps.and_then(|c| c.pointer(path)).and_then(|v| v.get("supported")).and_then(Value::as_bool);
+    let thinking = caps.and_then(|c| c.get("thinking")).and_then(|t| t.get("supported")).and_then(Value::as_bool);
+    let adaptive = match (supported("/thinking/types/adaptive"), thinking) {
+        (Some(said), _) => Some(said),
+        (None, Some(false)) => Some(false),
+        (None, _) => None,
+    };
+    Some(ModelInfo {
+        display_name: model_info::bounded_name(entry.get("display_name")),
+        context_tokens: model_info::token_count(entry.get("max_input_tokens")),
+        max_output_tokens: model_info::token_count(entry.get("max_tokens")),
+        tools: None,
+        vision: supported("/image_input"),
+        reasoning: adaptive,
+        efforts: caps.and_then(|c| c.get("effort")).and_then(effort_levels),
+        is_combo: false,
+        deprecated: matches!(entry.get("lifecycle").and_then(Value::as_str), Some("deprecated" | "retired")),
+        id,
+    })
+}
+
+/// `capabilities.effort`: no levels when it isn't supported, the levels marked supported when any
+/// level is described, else unknown.
+fn effort_levels(effort: &Value) -> Option<Vec<Effort>> {
+    if effort.get("supported").and_then(Value::as_bool) == Some(false) {
+        return Some(Vec::new());
+    }
+    let said: Vec<(Effort, bool)> = Effort::ALL
+        .into_iter()
+        .filter_map(|level| effort.get(level.as_str()).and_then(|v| v.get("supported")).and_then(Value::as_bool).map(|s| (level, s)))
+        .collect();
+    (!said.is_empty()).then(|| said.into_iter().filter(|(_, s)| *s).map(|(level, _)| level).collect())
 }
 
 pub fn message_json(m: &Msg) -> Value {
@@ -319,6 +469,8 @@ impl StreamState {
 
 impl ChatModel for Anthropic {
     fn turn(&mut self, req: &TurnRequest<'_>, on_delta: &mut dyn FnMut(Delta), stop: &Stop) -> Result<TurnResult, ToolError> {
+        self.learn();
+        stop.check()?;
         let agent = http::stream_agent(self.stream_limit);
         let reader = http::post_json(&agent, "Anthropic", &self.url("messages"), &self.headers(), &self.body(req))?;
         let mut state = StreamState::default();
@@ -388,6 +540,176 @@ mod tests {
         off.fallbacks = false;
         assert!(off.body(&TurnRequest { system: "s", messages: &msgs, tools: &[], effort: Effort::Low, max_tokens: 10 }).get("fallbacks").is_none());
         assert!(off.headers().iter().all(|(k, _)| *k != "anthropic-beta"));
+        // The body never carries sampling settings (the 2026-10-21 API version rejects them).
+        for key in ["temperature", "top_p", "top_k"] {
+            assert!(b.get(key).is_none(), "{key}");
+        }
+    }
+
+    /// The fallback beta is Anthropic's own: Bedrock, Vertex, proxies and gateways answer 400 to it.
+    #[test]
+    fn the_fallback_beta_goes_only_to_anthropics_own_api() {
+        let msgs = vec![Msg::user_text("hi")];
+        let req = TurnRequest { system: "s", messages: &msgs, tools: &[], effort: Effort::High, max_tokens: 10 };
+        for (base, sent) in
+            [(None, true), (Some("https://api.anthropic.com"), true), (Some("https://proxy.test/v1"), false), (Some("http://127.0.0.1:20128/v1"), false)]
+        {
+            let a = Anthropic::new(base, "sk-test".into(), "");
+            assert!(a.fallbacks, "on by default");
+            assert_eq!(a.body(&req).get("fallbacks").is_some(), sent, "{base:?}");
+            assert_eq!(a.headers().iter().any(|(k, v)| *k == "anthropic-beta" && v == FALLBACK_BETA), sent, "{base:?}");
+            assert_eq!(a.learn_capabilities, sent, "only Anthropic's own list is read before a turn");
+        }
+    }
+
+    /// A model whose list entry says it takes no effort or thinking setting isn't sent one; one that
+    /// lists its levels gets the nearest it has; unknown is sent as before.
+    #[test]
+    fn effort_and_thinking_follow_the_models_capabilities() {
+        let base = "https://capabilities.test";
+        let entry = |id: &str, caps: Value| model_entry(&json!({"id": id, "capabilities": caps})).unwrap();
+        model_info::remember(
+            base,
+            vec![
+                entry("plain", json!({"effort": {"supported": false}, "thinking": {"supported": true, "types": {"adaptive": {"supported": false}}}})),
+                entry(
+                    "three",
+                    json!({"effort": {"supported": true, "low": {"supported": true}, "medium": {"supported": true}, "high": {"supported": true}, "max": {"supported": false}, "xhigh": null}}),
+                ),
+            ],
+            model_info::LIST_TTL,
+        );
+        let req = |effort| TurnRequest { system: "s", messages: &[], tools: &[], effort, max_tokens: 10 };
+        let b = Anthropic::new(Some(base), "k".into(), "plain").body(&req(Effort::High));
+        assert!(b.get("output_config").is_none() && b.get("thinking").is_none(), "{b}");
+        let b = Anthropic::new(Some(base), "k".into(), "three").body(&req(Effort::Max));
+        assert_eq!(b["output_config"]["effort"], "high");
+        assert_eq!(b["thinking"]["type"], "adaptive");
+        let b = Anthropic::new(Some(base), "k".into(), "unlisted").body(&req(Effort::Xhigh));
+        assert_eq!((b["output_config"]["effort"].as_str(), b["thinking"]["type"].as_str()), (Some("xhigh"), Some("adaptive")));
+        let b = Anthropic::new(Some(base), "k".into(), "claude-sonnet-4-6").body(&req(Effort::Xhigh));
+        assert_eq!(b["output_config"]["effort"], "high", "the offline table still applies to an unlisted model");
+    }
+
+    #[test]
+    fn model_entries_are_read_and_hostile_values_are_unknown() {
+        let full = json!({
+            "id": "claude-opus-5-5", "display_name": "Claude Opus 5.5", "max_input_tokens": 1_000_000, "max_tokens": 128_000,
+            "lifecycle": "active",
+            "capabilities": {
+                "image_input": {"supported": true},
+                "effort": {"supported": true, "low": {"supported": true}, "medium": {"supported": true}, "high": {"supported": true}, "xhigh": {"supported": true}, "max": {"supported": true}},
+                "thinking": {"supported": true, "types": {"adaptive": {"supported": true}}}
+            }
+        });
+        let info = model_entry(&full).unwrap();
+        assert_eq!(info.display_name.as_deref(), Some("Claude Opus 5.5"));
+        assert_eq!((info.context_tokens, info.max_output_tokens), (Some(1_000_000), Some(128_000)));
+        assert_eq!((info.vision, info.reasoning, info.deprecated), (Some(true), Some(true), false));
+        assert_eq!(info.efforts.as_deref(), Some(&Effort::ALL[..]));
+        for bad in [json!("x"), json!(-1), json!(1e300), json!(0), json!([1])] {
+            let info = model_entry(&json!({"id": "m", "max_input_tokens": bad, "max_tokens": bad, "capabilities": bad, "display_name": bad, "lifecycle": bad}))
+                .unwrap();
+            let display_name = bad.as_str().map(str::to_string);
+            assert_eq!(info, ModelInfo { id: "m".into(), display_name, ..Default::default() }, "{bad}");
+        }
+        assert!(model_entry(&json!({"id": 5})).is_none());
+        assert!(model_entry(&json!({"id": ""})).is_none());
+        assert!(model_entry(&json!("claude")).is_none());
+        assert!(model_entry(&json!({"id": "old", "lifecycle": "deprecated"})).unwrap().deprecated);
+        assert_eq!(model_entry(&json!({"id": "m", "capabilities": {"effort": {}}})).unwrap().efforts, None, "nothing said");
+        assert_eq!(model_entry(&json!({"id": "m", "capabilities": {"thinking": {"supported": false}}})).unwrap().reasoning, Some(false));
+        assert_eq!(query_value("a b&c=é"), "a%20b%26c%3D%C3%A9");
+    }
+
+    /// A stand-in `/v1/models` server: each request gets `answer(n)` for its number `n`, up to
+    /// `max` requests; the paths asked for are kept.
+    fn pages(max: usize, answer: impl Fn(usize) -> String + Send + 'static) -> (String, std::sync::Arc<craft_anything_platform::sync::Mutex<Vec<String>>>) {
+        use std::io::{BufRead, BufReader, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let paths = std::sync::Arc::new(craft_anything_platform::sync::Mutex::new(Vec::new()));
+        let seen = paths.clone();
+        std::thread::spawn(move || {
+            for n in 0..max {
+                let Ok((mut stream, _)) = listener.accept() else { return };
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut line = String::new();
+                let _ = reader.read_line(&mut line);
+                seen.lock().unwrap().push(line.split_whitespace().nth(1).unwrap_or_default().to_string());
+                loop {
+                    let mut h = String::new();
+                    if reader.read_line(&mut h).unwrap_or(0) == 0 || h.trim().is_empty() {
+                        break;
+                    }
+                }
+                let body = answer(n);
+                let _ = write!(stream, "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n", body.len());
+                let _ = stream.write_all(body.as_bytes());
+            }
+        });
+        (url, paths)
+    }
+
+    #[test]
+    fn the_model_list_is_read_page_by_page() {
+        let (url, paths) = pages(2, |n| match n {
+            0 => json!({"data": [{"id": "a", "max_input_tokens": 1000}, {"id": "b"}], "has_more": true, "last_id": "b"}).to_string(),
+            _ => json!({"data": [{"id": "c"}, {"id": "a"}], "has_more": false, "last_id": "c"}).to_string(),
+        });
+        let a = Anthropic::new(Some(&url), "sk-test".into(), "a");
+        let models = a.list_model_info(Duration::from_secs(10)).unwrap();
+        assert_eq!(models.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(), ["a", "b", "c"], "joined, without the repeat");
+        assert_eq!(models[0].context_tokens, Some(1000));
+        assert_eq!(*paths.lock().unwrap(), ["/v1/models?limit=1000", "/v1/models?limit=1000&after_id=b"]);
+        assert!(matches!(model_info::recall(&url, "a"), Known::Listed(Some(m)) if m.context_tokens == Some(1000)), "remembered for turns");
+    }
+
+    #[test]
+    fn a_list_that_never_ends_stops_after_five_pages() {
+        let (url, paths) = pages(20, |n| json!({"data": [{"id": format!("m{n}")}], "has_more": true, "last_id": format!("m{n}")}).to_string());
+        let models = Anthropic::new(Some(&url), "sk-test".into(), "").list_models(Duration::from_secs(10)).unwrap();
+        assert_eq!(models, ["m0", "m1", "m2", "m3", "m4"]);
+        assert_eq!(paths.lock().unwrap().len(), MAX_MODEL_PAGES);
+        // The same cursor again is not followed.
+        let (url, paths) = pages(20, |_| json!({"data": [{"id": "same"}], "has_more": true, "last_id": "same"}).to_string());
+        assert_eq!(Anthropic::new(Some(&url), "k".into(), "").list_models(Duration::from_secs(10)).unwrap(), ["same"]);
+        assert_eq!(paths.lock().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn an_oversized_model_list_is_refused_not_read_into_memory() {
+        let (url, _) = pages(1, |_| {
+            let entries = vec![r#"{"id":"claude-model-with-a-long-name"}"#; 1_000_000].join(",");
+            format!(r#"{{"data":[{entries}],"has_more":false}}"#)
+        });
+        let e = Anthropic::new(Some(&url), "k".into(), "").list_model_info(Duration::from_secs(20)).unwrap_err();
+        assert_eq!(e.code, ErrorCode::OverLimit, "{e:?}");
+    }
+
+    #[test]
+    fn hostile_list_pages_never_panic() {
+        for body in ["{}", "[]", "null", r#"{"data": 5, "has_more": true}"#, r#"{"data": [null, 1, "x", {"id": null}], "has_more": "yes", "last_id": 7}"#] {
+            let (url, _) = pages(1, move |_| body.to_string());
+            assert_eq!(Anthropic::new(Some(&url), "k".into(), "").list_models(Duration::from_secs(10)).unwrap(), Vec::<String>::new(), "{body}");
+        }
+        let (url, _) = pages(1, |_| "not json".to_string());
+        assert_eq!(Anthropic::new(Some(&url), "k".into(), "").list_models(Duration::from_secs(10)).unwrap_err().code, ErrorCode::GarbledOutput);
+    }
+
+    #[test]
+    fn a_context_window_stop_is_typed() {
+        let mut st = StreamState::default();
+        for e in [
+            json!({"type":"message_start","message":{"model":"claude-opus-5-5","usage":{"input_tokens":10}}}),
+            json!({"type":"message_delta","delta":{"stop_reason":"model_context_window_exceeded"},"usage":{"output_tokens":3}}),
+            json!({"type":"message_stop"}),
+        ] {
+            st.apply(&SseEvent { event: None, data: e.to_string() }, &mut |_| {}).unwrap();
+        }
+        let r = st.finish("m").unwrap();
+        assert_eq!(r.stop, StopReason::ContextWindow);
+        assert_eq!(r.stop.as_str(), "model_context_window_exceeded");
     }
 
     /// Every level goes to a model that has it; one that lacks it gets the nearest level below.

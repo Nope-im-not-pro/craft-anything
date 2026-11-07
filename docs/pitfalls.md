@@ -444,6 +444,12 @@ edit, right before committing.
 
 ## Design
 
+**A beta header sent to every base URL.** The Claude client sent Anthropic's server-side fallback
+beta (`anthropic-beta` and a `fallbacks` field) to whatever address it was given; Claude on
+Bedrock or Vertex answers 400 to it, and a proxy or gateway may too. A provider's beta or
+vendor-specific field goes only to that provider's own address (here `is_anthropic_api`), and a
+test sends the same body to a stand-in address and checks it isn't there.
+
 **An early error without a terminal event.** Model validation returned after reporting an error,
 but headless chat waits for `TurnDone`, not just an idle worker. Preflight failures and cancellation
 must finish the event sequence too; regression tests check both the error/status and the terminal event.

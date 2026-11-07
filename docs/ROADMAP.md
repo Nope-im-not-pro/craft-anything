@@ -591,7 +591,7 @@ behind a gateway, nothing in the UI; Gemini and Kimi stay in Detect's list; no n
       `ai key`; `ai` in `registry::AREAS`; `--kind` help names `gemini`
 - [ ] "Add a provider" in Settings → AI and the first run, and "Change key" on a saved API backend;
       the first run's promise text matches
-- [ ] Claude client: fallback beta header only for api.anthropic.com, model info from `/v1/models`
+- [x] Claude client: fallback beta header only for api.anthropic.com, model info from `/v1/models`
       (paged, bounded), effort and thinking only where the model has them,
       `model_context_window_exceeded` refits like a context error, a spend-limit 429 is billing,
       Sonnet 5.5 cache-read price

@@ -18,6 +18,7 @@ pub mod http;
 pub mod key_tools;
 pub mod keys;
 pub mod model;
+pub mod model_info;
 pub mod model_options;
 pub mod model_tools;
 pub mod openai;
@@ -32,6 +33,7 @@ pub use config::{AiConfig, BackendEntry, BackendOptions, Price};
 pub use failure::{FailureKind, TurnFailure};
 pub use keys::KeyStore;
 pub use model::Effort;
+pub use model_info::ModelInfo;
 
 use crate::agent::{ApiConversation, EngineHost, LoopConfig, ModelSlot};
 use crate::model::{ChatModel, Delta, Msg, Stop, TurnRequest, TurnResult};

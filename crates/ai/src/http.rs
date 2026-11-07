@@ -41,6 +41,9 @@ fn net_error(what: &str, e: ureq::Error) -> ToolError {
         .with_remediation("Check your internet connection or that the server is running, then try again.")
 }
 
+/// Anthropic's `error.details.error_code` for a 429 that is a spending cap, not a rate limit.
+pub const SPEND_LIMIT: &str = "enforced_spend_limit_reached";
+
 /// Turn a non-2xx response into a plain error. Keys are never echoed.
 pub fn status_error(what: &str, status: u16, body: &str) -> ToolError {
     // Gemini's OpenAI-compatible endpoint wraps its error in a one-item array.
@@ -63,6 +66,9 @@ pub fn status_error(what: &str, status: u16, body: &str) -> ToolError {
     let provider = parsed
         .as_ref()
         .and_then(|v| v.pointer("/error/code").and_then(Value::as_str).or_else(|| v.pointer("/error/type").and_then(Value::as_str)).map(str::to_string));
+    // Anthropic's finer reason, e.g. a 429 that is a spend limit rather than a rate limit.
+    let provider_code =
+        parsed.as_ref().and_then(|v| v.pointer("/error/details/error_code")).and_then(Value::as_str).map(|c| c.chars().take(100).collect::<String>());
     let overflow = context_overflow(&detail);
     let remediation = match overflow {
         Some((window, _)) => format!(
@@ -70,11 +76,15 @@ pub fn status_error(what: &str, status: u16, body: &str) -> ToolError {
              in its server (Ollama: the Context length setting or OLLAMA_CONTEXT_LENGTH; LM Studio: the model's Context Length), \
              or set context_tokens for this AI in Settings → AI so less is sent."
         ),
+        None if provider_code.as_deref() == Some(SPEND_LIMIT) => {
+            "Your organisation's spending limit is reached. Raise it in the provider's console, or wait for the limit to reset.".to_string()
+        }
         None => remediation.to_string(),
     };
     ToolError::new(code, format!("{what} answered {status}: {detail}")).with_remediation(remediation).with_details(serde_json::json!({
         "status": status,
         "provider_error": provider,
+        "provider_error_code": provider_code,
         "context_window": overflow.map(|o| o.0),
         "prompt_tokens": overflow.and_then(|o| o.1),
     }))
@@ -150,8 +160,9 @@ pub fn post_json(agent: &ureq::Agent, what: &str, url: &str, headers: &[(&str, S
     let status = resp.status().as_u16();
     if !(200..300).contains(&status) {
         let retry_after = resp.headers().get("retry-after").and_then(|h| h.to_str().ok()).and_then(|s| s.trim().parse::<u64>().ok());
+        let request_id = request_id(resp.headers());
         let text = resp.into_body().read_to_string().unwrap_or_default();
-        let mut error = status_error(what, status, &text);
+        let mut error = with_request_id(status_error(what, status, &text), request_id);
         if let (Some(seconds), Some(Value::Object(details))) = (retry_after, error.details.as_mut()) {
             details.insert("retry_after_secs".into(), Value::from(seconds.min(crate::failure::MAX_RETRY_WAIT)));
         }
@@ -160,7 +171,10 @@ pub fn post_json(agent: &ureq::Agent, what: &str, url: &str, headers: &[(&str, S
     Ok(Box::new(resp.into_body().into_reader()))
 }
 
-/// GET JSON.
+/// Most bytes read from one JSON answer (model lists, probes); a hostile server can't fill memory.
+pub const MAX_JSON_BODY: u64 = 8 * 1024 * 1024;
+
+/// GET JSON. The answer is read up to [`MAX_JSON_BODY`]; a larger one is an `OverLimit` error.
 pub fn get_json(agent: &ureq::Agent, what: &str, url: &str, headers: &[(&str, String)]) -> Result<Value, ToolError> {
     let mut req = agent.get(url);
     for (k, v) in headers {
@@ -168,11 +182,32 @@ pub fn get_json(agent: &ureq::Agent, what: &str, url: &str, headers: &[(&str, St
     }
     let resp = req.call().map_err(|e| net_error(what, e))?;
     let status = resp.status().as_u16();
-    let text = resp.into_body().read_to_string().map_err(|e| net_error(what, e))?;
+    let request_id = request_id(resp.headers());
+    let text = match resp.into_body().into_with_config().limit(MAX_JSON_BODY).read_to_string() {
+        Ok(text) => text,
+        Err(ureq::Error::BodyExceedsLimit(_)) => {
+            return Err(ToolError::new(ErrorCode::OverLimit, format!("{what} sent a larger answer than we read (over 8 MiB).")));
+        }
+        Err(e) => return Err(net_error(what, e)),
+    };
     if !(200..300).contains(&status) {
-        return Err(status_error(what, status, &text));
+        return Err(with_request_id(status_error(what, status, &text), request_id));
     }
     serde_json::from_str(&text).map_err(|e| ToolError::new(ErrorCode::GarbledOutput, format!("{what} sent JSON we couldn't read: {e}")))
+}
+
+/// The provider's id for one request (Anthropic's `request-id`), bounded and printable, for logs.
+fn request_id(headers: &ureq::http::HeaderMap) -> Option<String> {
+    let id = headers.get("request-id").or_else(|| headers.get("x-request-id")).and_then(|h| h.to_str().ok())?.trim();
+    (!id.is_empty() && id.chars().all(|c| c.is_ascii_graphic())).then(|| id.chars().take(128).collect())
+}
+
+/// Keep a request id in an error's details, where logs find it; never in what the person reads.
+fn with_request_id(mut error: ToolError, id: Option<String>) -> ToolError {
+    if let (Some(id), Some(Value::Object(details))) = (id, error.details.as_mut()) {
+        details.insert("request_id".into(), Value::from(id));
+    }
+    error
 }
 
 /// One server-sent event.

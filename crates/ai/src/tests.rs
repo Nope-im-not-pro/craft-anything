@@ -807,7 +807,8 @@ fn anthropic_streaming_tool_loop_through_the_engine() {
     assert_eq!(r1.path, "/v1/messages");
     assert_eq!(r1.header("x-api-key"), Some("sk-test-123"));
     assert_eq!(r1.header("anthropic-version"), Some("2023-06-01"));
-    assert_eq!(r1.header("anthropic-beta"), Some("server-side-fallback-2026-07-01"));
+    // The fallback beta is only for Anthropic's own address, not this stand-in.
+    assert_eq!(r1.header("anthropic-beta"), None);
     assert_eq!(r1.header("user-agent"), Some("CraftAnything-dev"));
     let b = &r1.body;
     assert_eq!(b["model"], "claude-opus-5-5");
@@ -815,7 +816,7 @@ fn anthropic_streaming_tool_loop_through_the_engine() {
     assert_eq!(b["max_tokens"], 64000);
     assert_eq!(b["thinking"]["type"], "adaptive");
     assert_eq!(b["output_config"]["effort"], "high");
-    assert_eq!(b["fallbacks"], "default");
+    assert!(b.get("fallbacks").is_none());
     assert_eq!(b["tool_choice"]["type"], "auto");
     assert_eq!(b["system"][0]["cache_control"]["type"], "ephemeral");
     assert!(b["system"][0]["text"].as_str().unwrap().contains("Investigation so far"));
@@ -865,6 +866,58 @@ fn anthropic_refusal_and_http_errors() {
         ev.iter().any(|e| matches!(e, AgentEvent::Error { message, remediation: Some(r), .. } if message.contains("invalid x-api-key") && r.contains("key"))),
         "{ev:?}"
     );
+}
+
+/// A Claude client that learns capabilities reads the model list once before its first turn and
+/// leaves out what the model says it doesn't take; a list it can't read means "unknown" (sent as
+/// before) and isn't asked for again on the next turn.
+#[test]
+fn a_turn_learns_the_models_capabilities_once() {
+    let answer = || {
+        sse(&[
+            json!({"type":"message_start","message":{"model":"plain","usage":{"input_tokens":3}}}),
+            json!({"type":"content_block_start","index":0,"content_block":{"type":"text","text":"ok"}}),
+            json!({"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}),
+            json!({"type":"message_stop"}),
+        ])
+    };
+    let models = json!({"data": [{"id": "plain", "capabilities": {"effort": {"supported": false}, "thinking": {"supported": false}}}], "has_more": false});
+    let msgs = vec![model::Msg::user_text("hi")];
+    let req = model::TurnRequest { system: "s", messages: &msgs, tools: &[], effort: Effort::High, max_tokens: 10 };
+    let stop = model::Stop::default();
+    for listed in [true, false] {
+        let list = if listed { (200, "application/json", models.to_string()) } else { (404, "application/json", r#"{"error":{"message":"no"}}"#.to_string()) };
+        let (url, seen) = mock(vec![list, (200, "text/event-stream", answer()), (200, "text/event-stream", answer())]);
+        let mut claude = anthropic::Anthropic::new(Some(&url), "sk-test".into(), "plain");
+        assert!(!claude.learn_capabilities, "a stand-in address isn't asked unless told to");
+        claude.learn_capabilities = true;
+        model::ChatModel::turn(&mut claude, &req, &mut |_| {}, &stop).unwrap();
+        model::ChatModel::turn(&mut claude, &req, &mut |_| {}, &stop).unwrap();
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.iter().map(|s| s.path.as_str()).collect::<Vec<_>>(), ["/v1/models?limit=1000", "/v1/messages", "/v1/messages"], "listed={listed}");
+        for turn in &seen[1..] {
+            assert_eq!(turn.body.get("output_config").is_none(), listed, "{}", turn.body);
+            assert_eq!(turn.body.get("thinking").is_none(), listed, "{}", turn.body);
+        }
+    }
+}
+
+/// A request id is kept for logs, not shown as advice.
+#[test]
+fn a_model_list_error_keeps_the_request_id_for_logs() {
+    let l = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", l.local_addr().unwrap());
+    std::thread::spawn(move || {
+        if let Ok((mut s, _)) = l.accept() {
+            let mut buf = [0u8; 4096];
+            let _ = s.read(&mut buf);
+            let body = r#"{"type":"error","error":{"type":"not_found_error","message":"nope"}}"#;
+            let _ = write!(s, "HTTP/1.1 404 Not Found\r\nrequest-id: req_011Test\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}", body.len());
+        }
+    });
+    let e = anthropic::Anthropic::new(Some(&url), "k".into(), "").list_models(std::time::Duration::from_secs(5)).unwrap_err();
+    assert_eq!(e.details.as_ref().unwrap()["request_id"], "req_011Test");
+    assert!(!e.remediation.unwrap_or_default().contains("req_011Test"));
 }
 
 #[test]

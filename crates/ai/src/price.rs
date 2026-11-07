@@ -13,7 +13,11 @@ pub fn builtin(model: &str) -> Option<Price> {
     let m = model.rsplit('/').next().unwrap_or(model);
     Some(match m {
         "claude-opus-5-5" => p(4.0, 20.0, 0.20),
-        "claude-sonnet-5-5" => p(2.0, 10.0, 0.20),
+        // Claude 5.5 cache reads are 0.05× input: Sonnet 5.5 $0.10 (platform.claude.com pricing
+        // and prompt-caching pages, checked 2026-11-07).
+        "claude-sonnet-5-5" => p(2.0, 10.0, 0.10),
+        // Haiku 5.5's rate up to 100k input tokens; above that it is 0.50 / 2.50 / 0.05, which a
+        // single-tier price can't hold yet (R2.11, prices by provider and model).
         "claude-haiku-5-5" => p(0.10, 0.50, 0.01),
         "claude-fable-5-1" => p(10.0, 50.0, 0.25),
         "claude-opus-5" => p(5.0, 25.0, 0.50),
@@ -76,6 +80,10 @@ mod tests {
         assert!((c - (4.0 + 2.0 + 0.2)).abs() < 1e-9, "{c}");
         assert_eq!(cost("anthropic/claude-sonnet-5-5", &Usage { output_tokens: 1_000_000, ..Default::default() }, &BTreeMap::new(), false), Some(10.0));
         assert_eq!(cost("mystery", &u, &BTreeMap::new(), false), None);
+        // Sonnet 5.5 cache reads are $0.10 per million, not Opus's $0.20.
+        let read = Usage { cache_read_tokens: 1_000_000, ..Default::default() };
+        let s = cost("claude-sonnet-5-5", &read, &BTreeMap::new(), false).unwrap();
+        assert!((s - 0.10).abs() < 1e-9, "{s}");
         // Kimi K3.1 Pro through OpenRouter is priced by its model id.
         let k = cost("moonshotai/kimi-k3.1-pro", &Usage { input_tokens: 1_000_000, output_tokens: 1_000_000, ..Default::default() }, &BTreeMap::new(), false)
             .unwrap();
