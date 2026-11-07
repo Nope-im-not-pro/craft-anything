@@ -589,6 +589,7 @@ behind a gateway, nothing in the UI; Gemini and Kimi stay in Detect's list; no n
       `ai_backend_key_set`, `ai_backend_remove`, `ai_backends_list`, `ai_backends_detect`,
       `ai_backend_test`), a key checked before it's saved, CLI `ai providers`, `ai add --provider`,
       `ai key`; `ai` in `registry::AREAS`; `--kind` help names `gemini`
+      — claimed: Nope-im-not-pro, branch feature/r5.8-provider-offers-tools
 - [ ] "Add a provider" in Settings → AI and the first run, and "Change key" on a saved API backend;
       the first run's promise text matches
 - [x] Claude client: fallback beta header only for api.anthropic.com, model info from `/v1/models`
