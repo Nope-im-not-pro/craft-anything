@@ -324,6 +324,14 @@ pub fn messages_json(m: &Msg, react: bool) -> Vec<Value> {
     }
 }
 
+/// Most bytes of streamed arguments one tool call may collect (as the Anthropic stream allows).
+const MAX_CALL_ARGS: usize = 4 * 1024 * 1024;
+/// Most characters a streamed tool name may collect. Real names are far shorter; a longer one is
+/// refused like oversized arguments rather than cut, since a cut name would call the wrong tool.
+const MAX_CALL_NAME_CHARS: usize = 256;
+/// Most bytes of answer text one streamed turn may collect.
+const MAX_ANSWER_TEXT: usize = 32 * 1024 * 1024;
+
 #[derive(Debug, Default)]
 struct CallAcc {
     id: String,
@@ -381,6 +389,9 @@ impl ChatStream {
         let Some(choice) = v.get("choices").and_then(Value::as_array).and_then(|a| a.first()) else { return Ok(()) };
         let d = choice.get("delta").cloned().unwrap_or(Value::Null);
         if let Some(t) = d.get("content").and_then(Value::as_str).filter(|t| !t.is_empty()) {
+            if self.text.len().saturating_add(t.len()) > MAX_ANSWER_TEXT {
+                return Err(ToolError::new(ErrorCode::OverLimit, "The server sent more text than an answer can hold."));
+            }
             self.text.push_str(t);
             on_delta(Delta::Text(t.to_string()));
         }
@@ -398,9 +409,15 @@ impl ChatStream {
                     acc.id = id.to_string();
                 }
                 if let Some(n) = c.pointer("/function/name").and_then(Value::as_str) {
+                    if n.len() > MAX_CALL_NAME_CHARS * 4 || acc.name.chars().count().saturating_add(n.chars().count()) > MAX_CALL_NAME_CHARS {
+                        return Err(ToolError::new(ErrorCode::OverLimit, "The model sent an oversized tool name."));
+                    }
                     acc.name.push_str(n);
                 }
                 if let Some(a) = c.pointer("/function/arguments").and_then(Value::as_str) {
+                    if acc.args.len().saturating_add(a.len()) > MAX_CALL_ARGS {
+                        return Err(ToolError::new(ErrorCode::OverLimit, "The model sent oversized tool input."));
+                    }
                     acc.args.push_str(a);
                 }
                 if let Some(extra) = c.get("extra_content") {
@@ -958,6 +975,64 @@ mod tests {
             assert_eq!(result.stop, expected, "finish_reason={finish:?}");
             assert_eq!(result.message.tool_uses(), vec![("call_a".into(), "core_session_show".into(), json!({}))]);
         }
+    }
+
+    /// G10: tool arguments, tool names and answer text streamed by a server are capped.
+    #[test]
+    fn g10_streamed_accumulators_are_capped() {
+        let event = |delta: Value| SseEvent { event: None, data: json!({"choices": [{"delta": delta}]}).to_string() };
+
+        // 2,000 events of 4 KiB arguments on one call pass 4 MiB and stop with OverLimit.
+        let piece = "a".repeat(4 * 1024);
+        let args = event(json!({"tool_calls": [{"index": 0, "function": {"arguments": piece}}]}));
+        let mut st = ChatStream::default();
+        let mut err = None;
+        for _ in 0..2_000 {
+            if let Err(e) = st.apply(&args, &mut |_| {}) {
+                err = Some(e);
+                break;
+            }
+        }
+        assert_eq!(err.map(|e| e.code), Some(ErrorCode::OverLimit));
+        assert!(st.calls.values().all(|c| c.args.len() <= MAX_CALL_ARGS));
+
+        // A tool name past 256 characters is refused, not cut.
+        let mut st = ChatStream::default();
+        let name = event(json!({"tool_calls": [{"index": 0, "function": {"name": "é".repeat(200)}}]}));
+        st.apply(&name, &mut |_| {}).unwrap();
+        assert_eq!(st.apply(&name, &mut |_| {}).unwrap_err().code, ErrorCode::OverLimit);
+        let huge = event(json!({"tool_calls": [{"index": 1, "function": {"name": "n".repeat(1 << 20)}}]}));
+        assert_eq!(st.apply(&huge, &mut |_| {}).unwrap_err().code, ErrorCode::OverLimit);
+
+        // Text past 32 MiB, sent as large deltas under the 8 MiB event limit, stops with OverLimit.
+        let text = event(json!({"content": "t".repeat(7 * 1024 * 1024)}));
+        let mut st = ChatStream::default();
+        let mut sent = 0usize;
+        let mut err = None;
+        for _ in 0..10 {
+            let result = st.apply(&text, &mut |d| {
+                if let Delta::Text(t) = d {
+                    sent += t.len();
+                }
+            });
+            if let Err(e) = result {
+                err = Some(e);
+                break;
+            }
+        }
+        let err = err.unwrap();
+        assert_eq!(err.code, ErrorCode::OverLimit);
+        assert_eq!(err.message, "The server sent more text than an answer can hold.");
+        assert_eq!(sent, st.text.len());
+        assert!(st.text.len() <= MAX_ANSWER_TEXT);
+
+        // A normal stream right up to the name cap still works.
+        let mut st = ChatStream::default();
+        let ok = event(json!({"content": "hi", "tool_calls": [{"index": 0, "id": "c", "function": {"name": "n".repeat(256), "arguments": "{}"}}]}));
+        st.apply(&ok, &mut |_| {}).unwrap();
+        st.apply(&SseEvent { event: None, data: "[DONE]".into() }, &mut |_| {}).unwrap();
+        let r = st.finish("m").unwrap();
+        assert_eq!(r.message.tool_uses(), vec![("c".into(), "n".repeat(256), json!({}))]);
     }
 
     #[test]

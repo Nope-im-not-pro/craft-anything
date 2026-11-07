@@ -744,6 +744,12 @@ list: scan the folders people keep such things in (`KnownRoot`, by folder name, 
 levels down), and make an install use a copy already found outside our store. Test each layout
 (unzipped, cask, capitalised name) with temp folders, not the machine the test runs on.
 
+**A per-event cap without a total.** The OpenAI-compatible stream capped each SSE event at 8 MiB
+but appended tool arguments, tool names and answer text across events without a limit, so a
+hostile or broken server could grow them until memory ran out (G10). Every accumulator filled from
+a server has a cap, checked before the append, ending in `OverLimit`; test it with many events, not
+one large one.
+
 ## Agent tooling
 
 **Shared CLI efforts reached Claude unchanged.** Keep CLI-only levels available for agents, but

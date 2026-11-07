@@ -604,7 +604,7 @@ behind a gateway, nothing in the UI; Gemini and Kimi stay in Detect's list; no n
       with a dashboard link; any local server that answers 401 is offered with a key field
 - [ ] 9router token savers off (`X-9Router-Token-Saver: off`), allowed per backend with
       `token_saver = true` (decided: off by default, with a per-backend option)
-- [ ] Cap streamed tool arguments (4 MiB) and answer text (32 MiB) from OpenAI-compatible servers
+- [x] Cap streamed tool arguments (4 MiB) and answer text (32 MiB) from OpenAI-compatible servers
       — claimed: Nope-im-not-pro, branch bugfix/r5.8-openai-stream-caps
 - [ ] docs/9router.md, STATUS rows (not run live), file-formats.md says SETTINGS_VERSION 3
 
