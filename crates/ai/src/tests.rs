@@ -708,30 +708,40 @@ fn a_backend_context_budget_reaches_the_model() {
 }
 
 /// #374: a remote OpenAI-compatible service was treated as a local model: a 24K-token context
-/// and a cost of nothing. Only a server on this computer or its network is local.
+/// and a cost of nothing. Only a model on this computer or its network is local; a gateway on
+/// this computer (9router) passes the conversation on to cloud models, so it isn't either.
 #[test]
 fn only_an_openai_compatible_server_nearby_is_local() {
     let (h, _d) = hub();
-    for (name, base, local) in [
-        ("Ollama", "http://127.0.0.1:11434/v1", true),
-        ("LM Studio box", "http://192.168.1.20:1234/v1", true),
-        ("Docker Ollama", "http://ollama:11434/v1", true),
-        ("IPv6 link-local", "http://[fe80::1]:11434/v1", true),
-        ("Z.ai", "https://api.z.ai/api/coding/paas/v4", false),
-        ("Public vLLM", "http://8.8.8.8:8000/v1", false),
+    for (name, base, locality) in [
+        ("Ollama", "http://127.0.0.1:11434/v1", Locality::LocalModel),
+        ("LM Studio box", "http://192.168.1.20:1234/v1", Locality::LocalModel),
+        ("Docker Ollama", "http://ollama:11434/v1", Locality::LocalModel),
+        ("IPv6 link-local", "http://[fe80::1]:11434/v1", Locality::LocalModel),
+        ("Z.ai", "https://api.z.ai/api/coding/paas/v4", Locality::Hosted),
+        ("Public vLLM", "http://8.8.8.8:8000/v1", Locality::Hosted),
+        ("9router", "http://127.0.0.1:20128/v1", Locality::Gateway),
+        ("9router by name", "http://localhost:20128", Locality::Gateway),
+        ("Port 20128 elsewhere", "http://192.168.1.20:20128/v1", Locality::LocalModel),
     ] {
         add(&h, name, BackendKind::OpenaiCompatible, base, None);
         let slot = h.build_model(&h.entry(name).unwrap()).unwrap();
-        assert_eq!(slot.local, local, "{name} at {base}");
+        assert_eq!(slot.locality, locality, "{name} at {base}");
     }
     h.add_backend(
         BackendConfig { name: "Default".into(), kind: BackendKind::OpenaiCompatible, model: String::new(), base_url: None, ssh_host: None, enabled: true },
         None,
     )
     .unwrap();
-    assert!(h.build_model(&h.entry("Default").unwrap()).unwrap().local, "no address means Ollama on this computer");
+    assert_eq!(h.build_model(&h.entry("Default").unwrap()).unwrap().locality, Locality::LocalModel, "no address means Ollama on this computer");
     add(&h, "OpenAI", BackendKind::Openai, "http://127.0.0.1:9/v1", Some("sk-test"));
-    assert!(!h.build_model(&h.entry("OpenAI").unwrap()).unwrap().local, "only OpenAI-compatible servers can be local");
+    assert_eq!(h.build_model(&h.entry("OpenAI").unwrap()).unwrap().locality, Locality::Hosted, "only OpenAI-compatible servers can be local");
+    // A gateway on another port is named by hand, and saved.
+    assert!(h.set_locality("Ollama", Some(Locality::Gateway)).unwrap());
+    assert_eq!(h.build_model(&h.entry("Ollama").unwrap()).unwrap().locality, Locality::Gateway);
+    assert!(h.set_locality("Ollama", None).unwrap());
+    assert_eq!(h.build_model(&h.entry("Ollama").unwrap()).unwrap().locality, Locality::LocalModel, "worked out again");
+    assert!(!h.set_locality("Nobody", Some(Locality::Hosted)).unwrap());
 }
 
 fn add(h: &AiHub, name: &str, kind: BackendKind, base: &str, key: Option<&str>) {

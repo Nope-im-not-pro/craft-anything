@@ -764,6 +764,14 @@ hostile or broken server could grow them until memory ran out (G10). Every accum
 a server has a cap, checked before the append, ending in `OverLimit`; test it with many events, not
 one large one.
 
+**On this computer is not the same as a local model.** An OpenAI-compatible server counted as a
+local model when its address was on this network, so a gateway such as 9router, which passes the
+conversation on to cloud models, got a 24K budget, the lean tool list and a cost of nothing, and
+the Worker role took it as "the local model". Where a model runs is a typed `Locality` (hosted,
+gateway, local model) worked out in one place (`locality::of_entry`) and settable per backend;
+decide budgets, tools, prices and roles on it, never on the address. A gateway is priced only by a
+setting for its full model id, never by the first-party price of the name after `/`.
+
 ## Agent tooling
 
 **Shared CLI efforts reached Claude unchanged.** Keep CLI-only levels available for agents, but

@@ -21,6 +21,7 @@
 //! output_per_mtok = 2.0
 //! ```
 
+use crate::locality::Locality;
 use crate::model::Effort;
 use crate::{BackendConfig, BackendKind, Role};
 use craft_anything_engine::Settings;
@@ -86,6 +87,10 @@ pub struct BackendOptions {
     /// local/cloud default; this does not change the model server's own context window.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context_tokens: Option<u64>,
+    /// Where the model runs (`hosted`, `gateway` or `local_model`). Unset works it out from the
+    /// kind and address ([`crate::locality::of_entry`]); set it for a gateway on another port.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub locality: Option<Locality>,
     /// Agent CLIs: the program to run instead of the default for `model`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
@@ -333,7 +338,7 @@ impl AiConfig {
         let lead = || self.enabled().find(|b| b.config.kind != BackendKind::AgentCli).or_else(|| self.enabled().next());
         match role {
             Role::Lead => lead(),
-            Role::Worker => self.enabled().find(|b| b.config.kind == BackendKind::OpenaiCompatible).or_else(lead),
+            Role::Worker => self.enabled().find(|b| crate::locality::of_entry(b) == Locality::LocalModel).or_else(lead),
             Role::Reviewer | Role::Extractor => None,
             Role::Builder => self.enabled().find(|b| b.config.kind == BackendKind::AgentCli).or_else(lead),
         }
@@ -445,6 +450,43 @@ mod tests {
         for line in ["context_tokens = -1", "context_tokens = \"8000\"", "context_tokens = 8.5"] {
             assert_eq!(AiConfig::from_table(&table(line)).unwrap_err().code, ErrorCode::BadSettings);
         }
+    }
+
+    #[test]
+    fn locality_is_optional_and_round_trips() {
+        let table = |line: &str| -> toml::Table {
+            toml::from_str(&format!("[[backends]]\nname = \"Proxy\"\nkind = \"openai_compatible\"\nmodel = \"cc/claude-opus-5-5\"\n{line}")).unwrap()
+        };
+        let old = AiConfig::from_table(&table("")).unwrap();
+        assert_eq!(old.backends[0].options.locality, None, "files from before it parse");
+        assert!(!old.to_table().unwrap().to_string().contains("locality"));
+        let config = AiConfig::from_table(&table("locality = \"gateway\"")).unwrap();
+        assert_eq!(config.backends[0].options.locality, Some(Locality::Gateway));
+        assert!(config.to_table().unwrap().to_string().contains("locality = \"gateway\""));
+        assert_eq!(AiConfig::from_table(&config.to_table().unwrap()).unwrap(), config);
+        assert_eq!(AiConfig::from_table(&table("locality = \"local\"")).unwrap_err().code, ErrorCode::BadSettings);
+    }
+
+    /// The worker defaults to a model on this computer, not a gateway that passes the work on to
+    /// cloud models, nor a remote OpenAI-compatible service.
+    #[test]
+    fn the_worker_picks_a_local_model_over_a_gateway() {
+        let at = |name: &str, base: &str| {
+            let mut e = entry(name, BackendKind::OpenaiCompatible);
+            e.config.base_url = Some(base.into());
+            e
+        };
+        let mut c = AiConfig::default();
+        c.upsert(entry("Claude", BackendKind::Anthropic));
+        c.upsert(at("9router", "http://127.0.0.1:20128/v1"));
+        c.upsert(at("Z.ai", "https://api.z.ai/api/coding/paas/v4"));
+        assert_eq!(c.backend_for(Role::Worker).unwrap().config.name, "Claude", "no local model: the lead");
+        c.upsert(at("Ollama", "http://127.0.0.1:11434/v1"));
+        assert_eq!(c.backend_for(Role::Worker).unwrap().config.name, "Ollama");
+        let mut named = at("My proxy", "http://127.0.0.1:4000/v1");
+        named.options.locality = Some(Locality::Gateway);
+        c.backends.insert(0, named);
+        assert_eq!(c.backend_for(Role::Worker).unwrap().config.name, "Ollama", "a locality set by hand counts");
     }
 
     #[test]

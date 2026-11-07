@@ -5,6 +5,7 @@
 
 use crate::anthropic::INVALID_INPUT_KEY;
 use crate::context;
+use crate::locality::Locality;
 use crate::model::{Block, ChatModel, Delta, Effort, Msg, Speaker, Stop, StopReason, ToolDef, TurnRequest, Usage};
 use crate::price::{self, Meter};
 use crate::prompt;
@@ -246,8 +247,8 @@ type Waiters = Arc<Mutex<HashMap<String, Sender<bool>>>>;
 pub struct ModelSlot {
     pub name: String,
     pub model: Box<dyn ChatModel>,
-    /// Local models cost nothing.
-    pub local: bool,
+    /// Where the model runs: a local model costs nothing and gets the small budget and lean tools.
+    pub locality: Locality,
     pub effort: Option<Effort>,
     pub max_turns: u32,
     /// The backend's conversation budget; zero uses the local/cloud default.
@@ -330,7 +331,7 @@ impl AgentLoop {
 
     fn tool_defs(&self) -> Vec<ToolDef> {
         let mut tools = self.host.tools(&self.enabled);
-        if self.cfg.lean_for_local && self.chain.get(self.current).is_some_and(|s| s.local) {
+        if self.cfg.lean_for_local && self.chain.get(self.current).is_some_and(|s| s.locality == Locality::LocalModel) {
             tools = lean_for_local(tools, self.host.as_ref());
         }
         tools.push(ToolDef {
@@ -363,7 +364,7 @@ impl AgentLoop {
         if self.system.is_none() {
             self.emit(AgentEvent::Status { text: "Reading the investigation so far…".into() });
             let inv = self.host.investigation();
-            let memory = !(self.cfg.lean_for_local && self.chain.get(self.current).is_some_and(|s| s.local));
+            let memory = !(self.cfg.lean_for_local && self.chain.get(self.current).is_some_and(|s| s.locality == Locality::LocalModel));
             self.system = Some(prompt::system_prompt(self.cfg.beginner, self.host.clean_room(), &inv, memory));
         }
         if let Some(text) = text {
@@ -395,11 +396,11 @@ impl AgentLoop {
             let Some(result) = self.one_turn(&system, &tools, effort, &mut msg_usage, &mut msg_cost) else { break };
             self.last_input = result.usage.input_tokens + result.usage.cache_read_tokens + result.usage.cache_write_tokens;
             self.last_history_estimate = context::estimate_tokens(&self.history).max(1);
-            let (slot_name, local, model_id) = match self.chain.get(self.current) {
-                Some(s) => (s.name.clone(), s.local, result.model.clone()),
+            let (slot_name, locality, model_id) = match self.chain.get(self.current) {
+                Some(s) => (s.name.clone(), s.locality, result.model.clone()),
                 None => break,
             };
-            let cost = price::cost(&model_id, &result.usage, &self.cfg.prices, local);
+            let cost = price::cost(&model_id, &result.usage, &self.cfg.prices, locality);
             self.meter.add(result.usage, cost);
             msg_usage.add(result.usage);
             msg_cost = match (msg_cost, cost) {
@@ -529,7 +530,7 @@ impl AgentLoop {
         match (configured, reported) {
             (0, Some(room)) => room,
             (n, Some(room)) => n.min(room),
-            (0, None) if slot.is_some_and(|s| s.local) => context::LOCAL_CONTEXT_TOKENS,
+            (0, None) if slot.is_some_and(|s| s.locality == Locality::LocalModel) => context::LOCAL_CONTEXT_TOKENS,
             (0, None) => context::CLOUD_CONTEXT_TOKENS,
             (n, None) => n,
         }
@@ -576,9 +577,9 @@ impl AgentLoop {
         let mut accounted = None;
         let text = match summary {
             Some(Ok(r)) => {
-                let local = self.chain.get(self.current).is_some_and(|s| s.local);
+                let locality = self.chain.get(self.current).map_or(Locality::Hosted, |s| s.locality);
                 let backend = self.chain.get(self.current).map(|s| s.name.as_str()).unwrap_or_default();
-                let cost = price::cost(&r.model, &r.usage, &self.cfg.prices, local);
+                let cost = price::cost(&r.model, &r.usage, &self.cfg.prices, locality);
                 self.meter.add(r.usage, cost);
                 accounted = Some((r.usage, cost));
                 self.host.journal(
@@ -1080,6 +1081,75 @@ pub(crate) mod tests {
         assert!(lean.len() <= 20 && size(&lean) * 2 < size(&all), "{} tools, {} of {} characters", lean.len(), size(&lean), size(&all));
     }
 
+    fn loop_on(host: Arc<dyn ToolHost>, model: Box<dyn ChatModel>, locality: Locality, cfg: LoopConfig) -> AgentLoop {
+        let (events, _) = std::sync::mpsc::channel();
+        AgentLoop {
+            host,
+            chain: vec![ModelSlot { name: "Slot".into(), model, locality, effort: None, max_turns: 5, context_tokens: 0 }],
+            current: 0,
+            history: Vec::new(),
+            system: None,
+            enabled: BTreeSet::from([Toolset::Core, Toolset::Build]),
+            cfg,
+            events,
+            waiters: Arc::default(),
+            stop: Stop::default(),
+            cancel: Arc::new(Mutex::new(CancelToken::default())),
+            meter: Meter::default(),
+            last_input: 0,
+            last_history_estimate: 0,
+            failure: Arc::default(),
+            failed_builds: 0,
+            server_windows: BTreeMap::new(),
+        }
+    }
+
+    /// A gateway on this computer (9router) serves cloud models: a builder on it gets the cloud
+    /// budget and the whole Build+Core tool list, as on a hosted API, not a local model's.
+    #[test]
+    fn a_gateway_builder_gets_the_cloud_budget_and_every_tool() {
+        let engine = craft_anything_engine::Engine::shared(craft_anything_engine::testing::session(), crate::tools());
+        let host: Arc<dyn ToolHost> = Arc::new(EngineHost(engine));
+        let names = |l: &AgentLoop| l.tool_defs().into_iter().map(|t| t.name).collect::<Vec<_>>();
+        let lean = || LoopConfig { lean_for_local: true, ..LoopConfig::default() };
+        let script = || Box::new(Scripted { turns: VecDeque::new(), seen: Arc::default() }) as Box<dyn ChatModel>;
+        let hosted = loop_on(host.clone(), script(), Locality::Hosted, lean());
+        let gateway = loop_on(host.clone(), script(), Locality::Gateway, lean());
+        let local = loop_on(host, script(), Locality::LocalModel, lean());
+        assert_eq!(gateway.context_budget(), context::CLOUD_CONTEXT_TOKENS);
+        assert_eq!(hosted.context_budget(), context::CLOUD_CONTEXT_TOKENS);
+        assert_eq!(local.context_budget(), context::LOCAL_CONTEXT_TOKENS);
+        assert_eq!(names(&gateway), names(&hosted), "all of Build and Core");
+        assert!(names(&gateway).iter().any(|n| n == "core_journal_read"));
+        assert!(names(&local).len() < names(&gateway).len(), "only a local model gets the lean list");
+    }
+
+    /// A gateway's price is unknown (the meter says so), never the first-party price of the model
+    /// name after `/`, unless a price is set for its full model id.
+    #[test]
+    fn a_gateway_turn_costs_only_what_was_set_for_its_full_model_id() {
+        let answer = || {
+            let mut r = turn(vec![Block::Text { text: "done".into() }], StopReason::EndTurn).unwrap();
+            r.model = "cc/claude-opus-5-5".into();
+            r.usage = Usage { output_tokens: 1_000_000, ..Default::default() };
+            Box::new(Scripted { turns: VecDeque::from([Ok(r)]), seen: Arc::default() }) as Box<dyn ChatModel>
+        };
+        let host = || Arc::new(FakeHost { calls: Mutex::default(), journal: Mutex::default() }) as Arc<dyn ToolHost>;
+        let mut unpriced = loop_on(host(), answer(), Locality::Gateway, LoopConfig::default());
+        unpriced.handle("Hello");
+        assert_eq!(unpriced.meter.usage.output_tokens, 1_000_000);
+        assert!(!unpriced.meter.cost_known, "unknown, not the API price nor nothing");
+        let mut hosted = loop_on(host(), answer(), Locality::Hosted, LoopConfig::default());
+        hosted.handle("Hello");
+        assert!(hosted.meter.cost_known && hosted.meter.cost_usd > 0.0, "a hosted API keeps its list price");
+        let price = crate::config::Price { input_per_mtok: 0.0, output_per_mtok: 3.0, cache_read_per_mtok: None, cache_write_per_mtok: None };
+        let prices = BTreeMap::from([("cc/claude-opus-5-5".to_string(), price)]);
+        let mut priced = loop_on(host(), answer(), Locality::Gateway, LoopConfig { prices, ..LoopConfig::default() });
+        priced.handle("Hello");
+        assert!(priced.meter.cost_known);
+        assert!((priced.meter.cost_usd - 3.0).abs() < 1e-9, "{}", priced.meter.cost_usd);
+    }
+
     /// A scripted model: returns canned turns and records requests.
     pub struct Scripted {
         pub turns: VecDeque<Result<TurnResult, ToolError>>,
@@ -1205,7 +1275,7 @@ pub(crate) mod tests {
             ]),
             seen: seen.clone(),
         };
-        let slot = ModelSlot { name: "Fake".into(), model: Box::new(script), local: false, effort: None, max_turns: 10, context_tokens: 0 };
+        let slot = ModelSlot { name: "Fake".into(), model: Box::new(script), locality: Locality::Hosted, effort: None, max_turns: 10, context_tokens: 0 };
         let mut c = ApiConversation::start(host.clone(), vec![slot], LoopConfig { beginner: true, ..LoopConfig::default() }).unwrap();
         c.send("How does it work?");
         assert!(c.is_busy());
@@ -1252,7 +1322,7 @@ pub(crate) mod tests {
         let run = |turns: Vec<Result<TurnResult, ToolError>>| {
             let host = Arc::new(FakeHost { calls: Mutex::default(), journal: Mutex::default() });
             let script = Scripted { turns: VecDeque::from(turns), seen: Arc::default() };
-            let slot = ModelSlot { name: "Fake".into(), model: Box::new(script), local: false, effort: None, max_turns: 400, context_tokens: 0 };
+            let slot = ModelSlot { name: "Fake".into(), model: Box::new(script), locality: Locality::Hosted, effort: None, max_turns: 400, context_tokens: 0 };
             let mut c = ApiConversation::start(host, vec![slot], LoopConfig { beginner: true, ..LoopConfig::default() }).unwrap();
             c.send("build it");
             drain_until_done(&mut c, |_, _| {})
@@ -1295,7 +1365,7 @@ pub(crate) mod tests {
             turns: VecDeque::from([look("a"), look("b"), Ok(summary), turn(vec![Block::Text { text: "done".into() }], StopReason::EndTurn)]),
             seen: seen.clone(),
         };
-        let slot = ModelSlot { name: "Fake".into(), model: Box::new(script), local: false, effort: None, max_turns: 10, context_tokens: 0 };
+        let slot = ModelSlot { name: "Fake".into(), model: Box::new(script), locality: Locality::Hosted, effort: None, max_turns: 10, context_tokens: 0 };
         // Ordinary turns report 10 input tokens, over this budget, so room is made before the third.
         let cfg = || LoopConfig {
             transcript: Some(path.clone()),
@@ -1339,7 +1409,7 @@ pub(crate) mod tests {
         // A new conversation with the same file continues it.
         let seen2 = Arc::new(Mutex::new(Vec::new()));
         let script = Scripted { turns: VecDeque::from([turn(vec![Block::Text { text: "blue now".into() }], StopReason::EndTurn)]), seen: seen2.clone() };
-        let slot = ModelSlot { name: "Fake".into(), model: Box::new(script), local: false, effort: None, max_turns: 10, context_tokens: 0 };
+        let slot = ModelSlot { name: "Fake".into(), model: Box::new(script), locality: Locality::Hosted, effort: None, max_turns: 10, context_tokens: 0 };
         let mut c = ApiConversation::start(host, vec![slot], LoopConfig { transcript: Some(path.clone()), ..LoopConfig::default() }).unwrap();
         assert!(c.resumed());
         c.send("Make it blue");
@@ -1351,7 +1421,7 @@ pub(crate) mod tests {
 
     #[test]
     fn summary_accounting_keeps_unknown_prices_and_failed_calls_distinct() {
-        for (local, failed) in [(false, false), (true, false), (false, true)] {
+        for (locality, failed) in [(Locality::Hosted, false), (Locality::LocalModel, false), (Locality::Hosted, true)] {
             let host = Arc::new(FakeHost { calls: Mutex::default(), journal: Mutex::default() });
             let seen = Arc::new(Mutex::new(Vec::new()));
             let look = |id: &str| turn(vec![Block::ToolUse { id: id.into(), name: "look".into(), input: json!({}) }], StopReason::ToolUse);
@@ -1366,14 +1436,14 @@ pub(crate) mod tests {
                 turns: VecDeque::from([look("a"), look("b"), summary, turn(vec![Block::Text { text: "done".into() }], StopReason::EndTurn)]),
                 seen: seen.clone(),
             };
-            let slot = ModelSlot { name: "Fake".into(), model: Box::new(script), local, effort: None, max_turns: 10, context_tokens: 0 };
+            let slot = ModelSlot { name: "Fake".into(), model: Box::new(script), locality, effort: None, max_turns: 10, context_tokens: 0 };
             let mut c = ApiConversation::start(host.clone(), vec![slot], LoopConfig { context_tokens: 5, ..LoopConfig::default() }).unwrap();
             c.send("Build it");
             let events = drain_until_done(&mut c, |_, _| {});
             assert_eq!(seen.lock().unwrap().len(), 4, "the summary was attempted");
             let Some(AgentEvent::TurnDone { input_tokens, output_tokens, cost_usd, .. }) = events.last() else { panic!("{events:?}") };
             assert_eq!((*input_tokens, *output_tokens), if failed { (30, 15) } else { (40, 20) });
-            if local {
+            if locality == Locality::LocalModel {
                 assert_eq!(*cost_usd, Some(0.0));
             } else if failed {
                 assert!(cost_usd.is_some(), "a failed call supplies no usage or unknown price");
@@ -1405,7 +1475,7 @@ pub(crate) mod tests {
         let mut first = turn(vec![Block::ToolUse { id: "new".into(), name: "look".into(), input: json!({}) }], StopReason::ToolUse).unwrap();
         first.usage.input_tokens = budget + 1;
         let script = Scripted { turns: VecDeque::from([Ok(first), turn(vec![Block::Text { text: "done".into() }], StopReason::EndTurn)]), seen: seen.clone() };
-        let slot = ModelSlot { name: "Large".into(), model: Box::new(script), local: false, effort: None, max_turns: 5, context_tokens: budget };
+        let slot = ModelSlot { name: "Large".into(), model: Box::new(script), locality: Locality::Hosted, effort: None, max_turns: 5, context_tokens: budget };
         let mut conversation = ApiConversation::start(host.clone(), vec![slot], LoopConfig { transcript: Some(transcript), ..Default::default() }).unwrap();
         assert!(conversation.resumed());
         conversation.send("continue");
@@ -1430,7 +1500,14 @@ pub(crate) mod tests {
         let (events, _) = std::sync::mpsc::channel();
         let mut agent = AgentLoop {
             host: host.clone(),
-            chain: vec![ModelSlot { name: "Local".into(), model: Box::new(script), local: true, effort: None, max_turns: 5, context_tokens: 1000 }],
+            chain: vec![ModelSlot {
+                name: "Local".into(),
+                model: Box::new(script),
+                locality: Locality::LocalModel,
+                effort: None,
+                max_turns: 5,
+                context_tokens: 1000,
+            }],
             current: 0,
             history: vec![Msg::user_text("Build it")],
             system: None,
@@ -1472,14 +1549,15 @@ pub(crate) mod tests {
 
     #[test]
     fn backend_context_budgets_and_conversation_overrides() {
-        for (backend_budget, override_budget, local, summarises) in [
-            (5, 0, false, true),
-            (5, 0, true, true),
-            (0, 5, false, true),
-            (100, 5, false, true),
-            (5, 100, false, false),
-            (0, 0, false, false),
-            (0, 0, true, false),
+        for (backend_budget, override_budget, locality, summarises) in [
+            (5, 0, Locality::Hosted, true),
+            (5, 0, Locality::LocalModel, true),
+            (0, 5, Locality::Hosted, true),
+            (100, 5, Locality::Hosted, true),
+            (5, 100, Locality::Hosted, false),
+            (0, 0, Locality::Hosted, false),
+            (0, 0, Locality::Gateway, false),
+            (0, 0, Locality::LocalModel, false),
         ] {
             let host = Arc::new(FakeHost { calls: Mutex::default(), journal: Mutex::default() });
             let seen = Arc::new(Mutex::new(Vec::new()));
@@ -1492,7 +1570,7 @@ pub(crate) mod tests {
             let slot = ModelSlot {
                 name: "Configured".into(),
                 model: Box::new(Scripted { turns, seen: seen.clone() }),
-                local,
+                locality,
                 effort: None,
                 max_turns: 5,
                 context_tokens: backend_budget,
@@ -1501,7 +1579,7 @@ pub(crate) mod tests {
             conversation.send("Build it");
             let events = drain_until_done(&mut conversation, |_, _| {});
             let seen = seen.lock().unwrap();
-            assert_eq!(seen.len(), if summarises { 4 } else { 3 }, "backend {backend_budget}, override {override_budget}, local {local}");
+            assert_eq!(seen.len(), if summarises { 4 } else { 3 }, "backend {backend_budget}, override {override_budget}, {locality:?}");
             if summarises {
                 assert!(seen[2].last().unwrap().text().contains("summary of the work so far"));
                 assert!(seen[3][0].text().contains("Earlier work kept."));
@@ -1528,8 +1606,8 @@ pub(crate) mod tests {
             seen: seen.clone(),
         };
         let chain = vec![
-            ModelSlot { name: "Large".into(), model: Box::new(first), local: false, effort: None, max_turns: 5, context_tokens: 100 },
-            ModelSlot { name: "Small".into(), model: Box::new(fallback), local: false, effort: None, max_turns: 5, context_tokens: 5 },
+            ModelSlot { name: "Large".into(), model: Box::new(first), locality: Locality::Hosted, effort: None, max_turns: 5, context_tokens: 100 },
+            ModelSlot { name: "Small".into(), model: Box::new(fallback), locality: Locality::Hosted, effort: None, max_turns: 5, context_tokens: 5 },
         ];
         let mut conversation = ApiConversation::start(host.clone(), chain, LoopConfig::default()).unwrap();
         conversation.send("Build it");
@@ -1577,8 +1655,8 @@ pub(crate) mod tests {
         let fallback_seen = Arc::new(Mutex::new(Vec::new()));
         let fallback = Scripted { turns: VecDeque::from([answer("done"), answer("next done")]), seen: fallback_seen.clone() };
         let chain = vec![
-            ModelSlot { name: "Large".into(), model: Box::new(primary), local: false, effort: None, max_turns: 5, context_tokens: 30_000 },
-            ModelSlot { name: "Small".into(), model: Box::new(fallback), local: false, effort: None, max_turns: 5, context_tokens: budget },
+            ModelSlot { name: "Large".into(), model: Box::new(primary), locality: Locality::Hosted, effort: None, max_turns: 5, context_tokens: 30_000 },
+            ModelSlot { name: "Small".into(), model: Box::new(fallback), locality: Locality::Hosted, effort: None, max_turns: 5, context_tokens: budget },
         ];
         let mut conversation = ApiConversation::start(host.clone(), chain, LoopConfig { transcript: Some(transcript), ..Default::default() }).unwrap();
         conversation.send("continue");
@@ -1646,7 +1724,14 @@ pub(crate) mod tests {
             let host = Arc::new(FakeHost { calls: Mutex::default(), journal: Mutex::default() });
             let seen = Arc::new(Mutex::new(Vec::new()));
             let model = Scripted { turns: VecDeque::from(turns), seen: seen.clone() };
-            let chain = vec![ModelSlot { name: "Ollama (local)".into(), model: Box::new(model), local: true, effort: None, max_turns: 5, context_tokens: 0 }];
+            let chain = vec![ModelSlot {
+                name: "Ollama (local)".into(),
+                model: Box::new(model),
+                locality: Locality::LocalModel,
+                effort: None,
+                max_turns: 5,
+                context_tokens: 0,
+            }];
             let mut conversation = ApiConversation::start(host.clone(), chain, LoopConfig { transcript: Some(transcript), ..Default::default() }).unwrap();
             conversation.send("continue");
             let events = drain_until_done(&mut conversation, |_, _| {});
@@ -1794,8 +1879,8 @@ pub(crate) mod tests {
             seen: Arc::default(),
         };
         let chain = vec![
-            ModelSlot { name: "A".into(), model: Box::new(failing), local: false, effort: None, max_turns: 5, context_tokens: 0 },
-            ModelSlot { name: "B".into(), model: Box::new(refusing), local: true, effort: None, max_turns: 5, context_tokens: 0 },
+            ModelSlot { name: "A".into(), model: Box::new(failing), locality: Locality::Hosted, effort: None, max_turns: 5, context_tokens: 0 },
+            ModelSlot { name: "B".into(), model: Box::new(refusing), locality: Locality::LocalModel, effort: None, max_turns: 5, context_tokens: 0 },
         ];
         let mut c = ApiConversation::start(host, chain, LoopConfig::default()).unwrap();
         c.send("q");

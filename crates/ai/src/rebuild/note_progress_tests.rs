@@ -121,7 +121,14 @@ fn consumed_note_progress_errors_preserve_the_completed_turn() {
             progress: ws.root.join(BUILD_PROGRESS_FILE),
             directory,
         };
-        let slot = ModelSlot { name: "Scripted".into(), model: Box::new(model), local: true, effort: None, max_turns: 10, context_tokens: 0 };
+        let slot = ModelSlot {
+            name: "Scripted".into(),
+            model: Box::new(model),
+            locality: crate::Locality::LocalModel,
+            effort: None,
+            max_turns: 10,
+            context_tokens: 0,
+        };
         let api = ApiConversation::start(Arc::new(EngineHost(worker.engine.clone())), vec![slot], LoopConfig::default()).unwrap();
         let entry = crate::BackendEntry {
             config: crate::BackendConfig {
@@ -213,7 +220,14 @@ fn consumed_note_resets_survive_failed_and_cancelled_turns() {
                     stop: worker.stop.clone(),
                     calls: calls.clone(),
                 };
-                let slot = ModelSlot { name: "Scripted".into(), model: Box::new(model), local: true, effort: None, max_turns: 10, context_tokens: 0 };
+                let slot = ModelSlot {
+                    name: "Scripted".into(),
+                    model: Box::new(model),
+                    locality: crate::Locality::LocalModel,
+                    effort: None,
+                    max_turns: 10,
+                    context_tokens: 0,
+                };
                 let api = ApiConversation::start(Arc::new(EngineHost(worker.engine.clone())), vec![slot], LoopConfig::default()).unwrap();
                 let entry = crate::BackendEntry {
                     config: crate::BackendConfig {

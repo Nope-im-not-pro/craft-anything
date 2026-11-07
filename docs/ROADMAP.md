@@ -600,9 +600,12 @@ behind a gateway, nothing in the UI; Gemini and Kimi stay in Detect's list; no n
       organisations, different model access) share one list; key it by address and a hash of the key (never the key itself)
 - [ ] `anthropic-version` 2023-06-01 → 2026-10-21 after one live run (decided: move after a live
       run; the body never sends `temperature`, `top_p` or `top_k`) — waits for the live check
-- [ ] A gateway on this computer is not a local model: `Locality` (local model / gateway / hosted)
+- [x] A gateway on this computer is not a local model: `Locality` (local model / gateway / hosted)
       sets the context budget, the tool list and the cost; Worker's default takes a local model only
       — claimed: Nope-im-not-pro, branch refactor/r5.8-locality
+- [ ] Settings → AI shows a backend's locality and lets a person change it (only CLI
+      `ai locality <name> [gateway|local_model|hosted|default]` so far), and the meter says why a
+      gateway's cost is unknown ("cost unknown (through 9router)")
 - [ ] 9router: found at 127.0.0.1:20128 with or without its key (a 401 asks for one; one that
       answers without a key gets a security hint), its models with tool and combo flags, its errors
       with a dashboard link; any local server that answers 401 is offered with a key field

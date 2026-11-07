@@ -763,7 +763,14 @@ mod typed_retries {
             }
             script.turns.push_back(Err(ToolError::new(ErrorCode::OverLimit, "服务限流").with_details(json!({"status":429,"retry_after_secs":3}))));
             script.turns.push_back(turn(vec![Block::Text { text: "Built the notes app".into() }], StopReason::EndTurn));
-            let slot = ModelSlot { name: "Scripted".into(), model: Box::new(script), local: false, effort: None, max_turns: 10, context_tokens: 0 };
+            let slot = ModelSlot {
+                name: "Scripted".into(),
+                model: Box::new(script),
+                locality: crate::Locality::Hosted,
+                effort: None,
+                max_turns: 10,
+                context_tokens: 0,
+            };
             let enabled = std::collections::BTreeSet::from([craft_anything_engine::Toolset::Core, craft_anything_engine::Toolset::Build]);
             let mut api = ApiConversation::start_with(Arc::new(EngineHost(worker.engine.clone())), vec![slot], LoopConfig::default(), enabled).unwrap();
             let mut waits = Vec::new();
@@ -1238,7 +1245,8 @@ fn an_api_backend_builds_with_the_build_tools() {
         ]),
         seen: Arc::default(),
     };
-    let slot = ModelSlot { name: "Scripted".into(), model: Box::new(script), local: false, effort: None, max_turns: 10, context_tokens: 0 };
+    let slot =
+        ModelSlot { name: "Scripted".into(), model: Box::new(script), locality: crate::Locality::Hosted, effort: None, max_turns: 10, context_tokens: 0 };
     let enabled = std::collections::BTreeSet::from([craft_anything_engine::Toolset::Core, craft_anything_engine::Toolset::Build]);
     let mut api = ApiConversation::start_with(Arc::new(EngineHost(engine)), vec![slot], LoopConfig::default(), enabled).unwrap();
     let reply = w.turn(&mut ws, &mut api, "Build it.", None).unwrap();
@@ -1931,7 +1939,14 @@ mod picking_up_a_build {
             seen: Arc::clone(&seen),
         };
         let mut worker = check_worker(&ws, false);
-        let slot = ModelSlot { name: "Scripted".into(), model: Box::new(script), local: true, effort: None, max_turns: 10, context_tokens: 0 };
+        let slot = ModelSlot {
+            name: "Scripted".into(),
+            model: Box::new(script),
+            locality: crate::Locality::LocalModel,
+            effort: None,
+            max_turns: 10,
+            context_tokens: 0,
+        };
         let api = ApiConversation::start(Arc::new(EngineHost(worker.engine.clone())), vec![slot], LoopConfig::default()).unwrap();
         let entry = crate::BackendEntry {
             config: crate::BackendConfig {
@@ -2042,7 +2057,14 @@ mod picking_up_a_build {
                     dir: notes::notes_dir(&ws.inbox_dir()),
                     text,
                 };
-                let slot = ModelSlot { name: "Scripted".into(), model: Box::new(model), local: true, effort: None, max_turns: 10, context_tokens: 0 };
+                let slot = ModelSlot {
+                    name: "Scripted".into(),
+                    model: Box::new(model),
+                    locality: crate::Locality::LocalModel,
+                    effort: None,
+                    max_turns: 10,
+                    context_tokens: 0,
+                };
                 let api = ApiConversation::start(Arc::new(EngineHost(worker.engine.clone())), vec![slot], LoopConfig::default()).unwrap();
                 let entry = crate::BackendEntry {
                     config: crate::BackendConfig {

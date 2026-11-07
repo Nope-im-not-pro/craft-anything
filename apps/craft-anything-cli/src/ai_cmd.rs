@@ -3,7 +3,7 @@
 use crate::output::Format;
 use crate::{Cli, INTERRUPTED, emit, fail, make_engine, out};
 use clap::{Args, Subcommand};
-use craft_anything_ai::{AgentEvent, AiHub, BackendConfig, BackendKind, Effort};
+use craft_anything_ai::{AgentEvent, AiHub, BackendConfig, BackendKind, Effort, Locality};
 use craft_anything_evidence::ToolError;
 use serde_json::{Value, json};
 use std::io::{Read as _, Write as _};
@@ -78,6 +78,11 @@ pub enum AiCommand {
     /// Set how hard a Claude backend thinks (the Claude API or Claude Code): low, medium, high,
     /// xhigh or max, or `default` for the usual level; leave it out to see the level and choices.
     Effort { name: String, level: Option<String> },
+    /// Set where an AI's model runs: `local_model` (on this computer or network: a small context,
+    /// fewer tools, no cost), `gateway` (a program here that passes the work on to cloud models,
+    /// such as 9router: a large context, every tool, a cost that's unknown unless a price is set)
+    /// or `hosted`, or `default` to work it out from the address again; leave it out to see it.
+    Locality { name: String, locality: Option<String> },
     /// Send a tiny request and report latency.
     Test { name: String },
     /// Choose the backend that builds (leave the name out to go back to automatic).
@@ -346,6 +351,37 @@ pub fn ai(cli: &Cli, c: &AiCommand, f: Format) -> u8 {
             match hub.set_effort(name, effort) {
                 Ok(found) => {
                     emit(&json!({"name": name, "effort": effort.map(Effort::as_str), "found": found}), f);
+                    if found { 0 } else { 1 }
+                }
+                Err(e) => fail(&e, f),
+            }
+        }
+        AiCommand::Locality { name, locality: None } => match hub.backends().into_iter().find(|b| b.name == *name) {
+            Some(config) => {
+                let e = craft_anything_ai::BackendEntry { options: hub.options().remove(name).unwrap_or_default(), config };
+                let choices: Vec<&str> = Locality::ALL.iter().map(|l| l.as_str()).collect();
+                emit(
+                    &json!({"name": name, "locality": craft_anything_ai::locality::of_entry(&e).as_str(), "set": e.options.locality.map(Locality::as_str), "choices": choices}),
+                    f,
+                );
+                0
+            }
+            None => fail(&ToolError::invalid(format!("No AI backend named {name:?}")).with_remediation("See `craft-anything-cli ai list`."), f),
+        },
+        AiCommand::Locality { name, locality: Some(locality) } => {
+            let locality = match locality.trim() {
+                "default" => None,
+                l => match Locality::parse(l) {
+                    Some(l) => Some(l),
+                    None => {
+                        let e = ToolError::invalid(format!("{l:?} isn't a locality.")).with_remediation("Use local_model, gateway, hosted or default.");
+                        return fail(&e, f);
+                    }
+                },
+            };
+            match hub.set_locality(name, locality) {
+                Ok(found) => {
+                    emit(&json!({"name": name, "locality": locality.map(Locality::as_str), "found": found}), f);
                     if found { 0 } else { 1 }
                 }
                 Err(e) => fail(&e, f),

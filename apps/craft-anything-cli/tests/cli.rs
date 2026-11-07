@@ -33,6 +33,28 @@ fn opencode_cli_lists_supported_depths_and_rejects_unsupported_choices() {
     assert_eq!(cli(&["ai", "model", "OpenCode", "test/model", "--default"], cfg.path()).code, Some(2));
 }
 
+/// 9router on its usual port is a gateway, and a proxy on another port can be named one by hand.
+#[test]
+fn ai_locality_shows_and_sets_where_a_model_runs() {
+    let cfg = tempfile::tempdir().unwrap();
+    let json = |o: Output| -> Value { serde_json::from_slice(&o.stdout).unwrap() };
+    assert!(
+        cli(&["ai", "add", "9router", "--kind", "openai_compatible", "--model", "cc/claude-opus-5-5", "--base-url", "http://127.0.0.1:20128/v1"], cfg.path())
+            .success
+    );
+    assert!(cli(&["ai", "add", "Proxy", "--kind", "openai_compatible", "--model", "m", "--base-url", "http://127.0.0.1:4000/v1"], cfg.path()).success);
+    assert_eq!(json(cli(&["ai", "locality", "9router", "--format", "json"], cfg.path()))["locality"], "gateway");
+    assert_eq!(json(cli(&["ai", "locality", "Proxy", "--format", "json"], cfg.path()))["locality"], "local_model");
+    assert!(cli(&["ai", "locality", "Proxy", "gateway"], cfg.path()).success);
+    let shown = json(cli(&["ai", "locality", "Proxy", "--format", "json"], cfg.path()));
+    assert_eq!((&shown["locality"], &shown["set"]), (&json!("gateway"), &json!("gateway")));
+    assert!(std::fs::read_to_string(cfg.path().join("config.toml")).unwrap().contains("locality = \"gateway\""));
+    assert!(!cli(&["ai", "locality", "Proxy", "local"], cfg.path()).success, "not a locality");
+    assert!(cli(&["ai", "locality", "Proxy", "default"], cfg.path()).success);
+    assert!(!std::fs::read_to_string(cfg.path().join("config.toml")).unwrap().contains("locality"));
+    assert!(!cli(&["ai", "locality", "Nobody", "hosted"], cfg.path()).success);
+}
+
 #[test]
 fn commands_and_exit_codes() {
     let cfg = tempfile::tempdir().unwrap();

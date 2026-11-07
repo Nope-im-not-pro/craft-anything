@@ -17,6 +17,7 @@ pub mod failure_log;
 pub mod http;
 pub mod key_tools;
 pub mod keys;
+pub mod locality;
 pub mod model;
 pub mod model_info;
 pub mod model_options;
@@ -32,6 +33,7 @@ pub use cli_agents::models::{AgentModel, ModelContext};
 pub use config::{AiConfig, BackendEntry, BackendOptions, Price};
 pub use failure::{FailureKind, TurnFailure};
 pub use keys::KeyStore;
+pub use locality::Locality;
 pub use model::Effort;
 pub use model_info::ModelInfo;
 
@@ -640,6 +642,20 @@ impl AiHub {
         Ok(true)
     }
 
+    /// Where a backend's model runs (`None`: worked out from its kind and address again, see
+    /// [`locality::of_entry`]). Returns false when there was no such backend.
+    pub fn set_locality(&self, name: &str, locality: Option<Locality>) -> Result<bool, ToolError> {
+        let mut cfg = self.config_to_change()?;
+        let Some(b) = cfg.backends.iter_mut().find(|b| b.config.name == name) else { return Ok(false) };
+        if locality.is_some() && b.config.kind == BackendKind::AgentCli {
+            return Err(ToolError::invalid(format!("{name} is an agent app, which runs its own models."))
+                .with_remediation("Locality is for API backends and servers such as Ollama or 9router."));
+        }
+        b.options.locality = locality;
+        self.save_config(&cfg)?;
+        Ok(true)
+    }
+
     /// The models a backend can be set to: the API's or registered agent's list.
     /// Empty for an agent app that picks its own. Blocking (bounded); run it off the UI thread.
     pub fn model_choices(&self, name: &str) -> Result<Vec<String>, ToolError> {
@@ -812,10 +828,10 @@ impl AiHub {
             _ => None,
         };
         let base = tunneled_base.as_deref().or(base);
-        // A server on this computer or its network (Ollama, LM Studio, one reached over ssh) costs
-        // nothing and gets the small context budget; a remote OpenAI-compatible service has a
-        // large context and a bill, as any other cloud API (#374).
-        let local = c.kind == BackendKind::OpenaiCompatible && base.is_none_or(detect::on_this_network);
+        // A model on this computer or its network (Ollama, LM Studio, one reached over ssh) costs
+        // nothing and gets the small context budget; a gateway such as 9router and a remote
+        // service have a large context and a bill, as any other cloud API (#374).
+        let locality = locality::of_entry(e);
         let limit = stream_limit(&e.options);
         let with_limit = |mut o: openai::OpenAi| {
             o.stream_limit = limit;
@@ -847,7 +863,7 @@ impl AiHub {
         Ok(ModelSlot {
             name: c.name.clone(),
             model,
-            local,
+            locality,
             effort: e.options.effort,
             max_turns: e.options.max_turns.unwrap_or(agent::DEFAULT_MAX_TURNS),
             context_tokens: e.options.context_tokens.unwrap_or(0),

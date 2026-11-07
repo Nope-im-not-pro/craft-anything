@@ -53,7 +53,8 @@ fn run_idle_builder(create_app_dir: bool) -> (ToolError, Vec<Vec<Msg>>) {
     let seen = Arc::default();
     let turns = (0..20).map(|_| turn(vec![Block::Text { text: "Built it and ran npm run build.".into() }], StopReason::EndTurn)).collect();
     let model = Scripted { turns, seen: Arc::clone(&seen) };
-    let slot = ModelSlot { name: "Scripted".into(), model: Box::new(model), local: true, effort: None, max_turns: 10, context_tokens: 0 };
+    let slot =
+        ModelSlot { name: "Scripted".into(), model: Box::new(model), locality: crate::Locality::LocalModel, effort: None, max_turns: 10, context_tokens: 0 };
     let api = ApiConversation::start(Arc::new(EngineHost(worker.engine.clone())), vec![slot], LoopConfig::default()).unwrap();
     let entry = crate::BackendEntry {
         config: crate::BackendConfig {
@@ -127,7 +128,7 @@ impl ChatModel for Busy {
 fn run_busy_builder(ws: &mut Workspace, seen: &Arc<Mutex<usize>>, message: Option<&str>) -> ToolError {
     let mut worker = check_worker(ws, false);
     let model = Busy { app: ws.app_dir(), turn: 0, seen: Arc::clone(seen) };
-    let slot = ModelSlot { name: "Busy".into(), model: Box::new(model), local: true, effort: None, max_turns: 10, context_tokens: 0 };
+    let slot = ModelSlot { name: "Busy".into(), model: Box::new(model), locality: crate::Locality::LocalModel, effort: None, max_turns: 10, context_tokens: 0 };
     let api = ApiConversation::start(Arc::new(EngineHost(worker.engine.clone())), vec![slot], LoopConfig::default()).unwrap();
     let entry = crate::BackendEntry {
         config: crate::BackendConfig {

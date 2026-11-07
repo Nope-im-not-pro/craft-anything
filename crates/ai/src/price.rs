@@ -1,6 +1,7 @@
 //! The cost meter: USD per million tokens by model, overridable in settings.
 
 use crate::config::Price;
+use crate::locality::Locality;
 use crate::model::Usage;
 use std::collections::BTreeMap;
 
@@ -28,12 +29,15 @@ pub fn builtin(model: &str) -> Option<Price> {
     })
 }
 
-/// Cost of one turn's usage, or `None` when the price is unknown. Local models cost nothing.
-pub fn cost(model: &str, usage: &Usage, overrides: &BTreeMap<String, Price>, local: bool) -> Option<f64> {
-    if local {
-        return Some(0.0);
-    }
-    let price = overrides.get(model).copied().or_else(|| builtin(model))?;
+/// Cost of one turn's usage, or `None` when the price is unknown. Local models cost nothing. A
+/// gateway is priced only by a setting for its full model id (`cc/claude-opus-5-5`): what it
+/// charges is its own business, and the first-party price of the name after `/` would be a guess.
+pub fn cost(model: &str, usage: &Usage, overrides: &BTreeMap<String, Price>, locality: Locality) -> Option<f64> {
+    let price = match locality {
+        Locality::LocalModel => return Some(0.0),
+        Locality::Gateway => overrides.get(model).copied()?,
+        Locality::Hosted => overrides.get(model).copied().or_else(|| builtin(model))?,
+    };
     let per = |tokens: u64, rate: f64| tokens as f64 * rate / 1_000_000.0;
     let read = price.cache_read_per_mtok.unwrap_or(price.input_per_mtok * 0.1);
     let write = price.cache_write_per_mtok.unwrap_or(price.input_per_mtok * 1.25);
@@ -76,23 +80,37 @@ mod tests {
     #[test]
     fn price_math() {
         let u = Usage { input_tokens: 1_000_000, output_tokens: 100_000, cache_read_tokens: 1_000_000, cache_write_tokens: 0 };
-        let c = cost("claude-opus-5-5", &u, &BTreeMap::new(), false).unwrap();
+        let c = cost("claude-opus-5-5", &u, &BTreeMap::new(), Locality::Hosted).unwrap();
         assert!((c - (4.0 + 2.0 + 0.2)).abs() < 1e-9, "{c}");
-        assert_eq!(cost("anthropic/claude-sonnet-5-5", &Usage { output_tokens: 1_000_000, ..Default::default() }, &BTreeMap::new(), false), Some(10.0));
-        assert_eq!(cost("mystery", &u, &BTreeMap::new(), false), None);
+        assert_eq!(
+            cost("anthropic/claude-sonnet-5-5", &Usage { output_tokens: 1_000_000, ..Default::default() }, &BTreeMap::new(), Locality::Hosted),
+            Some(10.0)
+        );
+        assert_eq!(cost("mystery", &u, &BTreeMap::new(), Locality::Hosted), None);
         // Sonnet 5.5 cache reads are $0.10 per million, not Opus's $0.20.
         let read = Usage { cache_read_tokens: 1_000_000, ..Default::default() };
-        let s = cost("claude-sonnet-5-5", &read, &BTreeMap::new(), false).unwrap();
+        let s = cost("claude-sonnet-5-5", &read, &BTreeMap::new(), Locality::Hosted).unwrap();
         assert!((s - 0.10).abs() < 1e-9, "{s}");
         // Kimi K3.1 Pro through OpenRouter is priced by its model id.
-        let k = cost("moonshotai/kimi-k3.1-pro", &Usage { input_tokens: 1_000_000, output_tokens: 1_000_000, ..Default::default() }, &BTreeMap::new(), false)
-            .unwrap();
+        let k = cost(
+            "moonshotai/kimi-k3.1-pro",
+            &Usage { input_tokens: 1_000_000, output_tokens: 1_000_000, ..Default::default() },
+            &BTreeMap::new(),
+            Locality::Hosted,
+        )
+        .unwrap();
         assert!((k - (2.0 + 10.0)).abs() < 1e-9, "{k}");
-        assert_eq!(cost("mystery", &u, &BTreeMap::new(), true), Some(0.0));
+        assert_eq!(cost("mystery", &u, &BTreeMap::new(), Locality::LocalModel), Some(0.0));
         let mut o = BTreeMap::new();
         o.insert("mystery".into(), Price { input_per_mtok: 1.0, output_per_mtok: 1.0, cache_read_per_mtok: None, cache_write_per_mtok: None });
         let w = Usage { cache_write_tokens: 1_000_000, ..Default::default() };
-        assert_eq!(cost("mystery", &w, &o, false), Some(1.25));
+        assert_eq!(cost("mystery", &w, &o, Locality::Hosted), Some(1.25));
+        // A gateway never gets the first-party price of the name after `/`, only its own setting.
+        let opus = Usage { output_tokens: 1_000_000, ..Default::default() };
+        assert_eq!(cost("cc/claude-opus-5-5", &opus, &BTreeMap::new(), Locality::Gateway), None);
+        assert_eq!(cost("claude-opus-5-5", &opus, &BTreeMap::new(), Locality::Gateway), None);
+        o.insert("cc/claude-opus-5-5".into(), Price { input_per_mtok: 0.0, output_per_mtok: 3.0, cache_read_per_mtok: None, cache_write_per_mtok: None });
+        assert_eq!(cost("cc/claude-opus-5-5", &opus, &o, Locality::Gateway), Some(3.0));
         let mut m = Meter::default();
         m.add(u, Some(1.0));
         m.add(u, None);
