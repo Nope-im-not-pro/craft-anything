@@ -602,6 +602,7 @@ behind a gateway, nothing in the UI; Gemini and Kimi stay in Detect's list; no n
       run; the body never sends `temperature`, `top_p` or `top_k`) — waits for the live check
 - [ ] A gateway on this computer is not a local model: `Locality` (local model / gateway / hosted)
       sets the context budget, the tool list and the cost; Worker's default takes a local model only
+      — claimed: Nope-im-not-pro, branch refactor/r5.8-locality
 - [ ] 9router: found at 127.0.0.1:20128 with or without its key (a 401 asks for one; one that
       answers without a key gets a security hint), its models with tool and combo flags, its errors
       with a dashboard link; any local server that answers 401 is offered with a key field
