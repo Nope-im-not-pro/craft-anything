@@ -1462,3 +1462,9 @@ In this project, {kind}: {choice}.	В этом проекте {kind}: {choice}.
 Couldn't change the approvals:	Не удалось изменить разрешения:
 What the builder may do without asking you, in this project.	Что конструктор может делать в этом проекте, не спрашивая вас.
 Default follows Auto mode: with it on, what can be undone goes ahead and the rest is refused; with it off, the builder asks.	«По умолчанию» следует авторежиму: когда он включён, то, что можно отменить, выполняется, а остальное отклоняется; когда выключен, конструктор спрашивает.
+List AI providers	Список поставщиков ИИ
+List the AIs set up	Список настроенных ИИ
+Find AI on this computer	Найти ИИ на этом компьютере
+Add an AI	Добавить ИИ
+Change an AI's key	Изменить ключ ИИ
+Test an AI	Проверить ИИ

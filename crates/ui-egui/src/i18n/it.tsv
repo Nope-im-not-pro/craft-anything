@@ -1464,3 +1464,9 @@ In this project, {kind}: {choice}.	In questo progetto, {kind}: {choice}.
 Couldn't change the approvals:	Impossibile cambiare le approvazioni:
 What the builder may do without asking you, in this project.	Cosa può fare il costruttore senza chiedertelo, in questo progetto.
 Default follows Auto mode: with it on, what can be undone goes ahead and the rest is refused; with it off, the builder asks.	Predefinito segue la modalità automatica: se è attiva, ciò che si può annullare va avanti e il resto è rifiutato; se è spenta, il costruttore chiede.
+List AI providers	Elenca i fornitori di IA
+List the AIs set up	Elenca le IA configurate
+Find AI on this computer	Trova IA su questo computer
+Add an AI	Aggiungi un'IA
+Change an AI's key	Cambia la chiave di un'IA
+Test an AI	Prova un'IA

@@ -1462,3 +1462,9 @@ In this project, {kind}: {choice}.	Trong dự án này, {kind}: {choice}.
 Couldn't change the approvals:	Không thể thay đổi phê duyệt:
 What the builder may do without asking you, in this project.	Những gì trình xây dựng được làm mà không cần hỏi bạn, trong dự án này.
 Default follows Auto mode: with it on, what can be undone goes ahead and the rest is refused; with it off, the builder asks.	Mặc định theo chế độ tự động: khi bật, việc có thể hoàn tác sẽ được làm và phần còn lại bị từ chối; khi tắt, trình xây dựng sẽ hỏi.
+List AI providers	Liệt kê các nhà cung cấp AI
+List the AIs set up	Liệt kê các AI đã thiết lập
+Find AI on this computer	Tìm AI trên máy tính này
+Add an AI	Thêm một AI
+Change an AI's key	Đổi khóa của một AI
+Test an AI	Kiểm tra một AI

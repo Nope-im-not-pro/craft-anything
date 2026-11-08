@@ -1462,3 +1462,9 @@ In this project, {kind}: {choice}.	V tomto projektu {kind}: {choice}.
 Couldn't change the approvals:	Schvalování nešlo změnit:
 What the builder may do without asking you, in this project.	Co smí sestavovací agent v tomto projektu dělat, aniž by se vás ptal.
 Default follows Auto mode: with it on, what can be undone goes ahead and the rest is refused; with it off, the builder asks.	Výchozí se řídí automatickým režimem: když je zapnutý, co lze vrátit, proběhne, a zbytek se odmítne; když je vypnutý, sestavovací agent se ptá.
+List AI providers	Vypsat poskytovatele AI
+List the AIs set up	Vypsat nastavené AI
+Find AI on this computer	Najít AI v tomto počítači
+Add an AI	Přidat AI
+Change an AI's key	Změnit klíč AI
+Test an AI	Otestovat AI

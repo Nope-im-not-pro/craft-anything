@@ -9,8 +9,9 @@ form is the CLI command.
 
 - **area**: `core`, `native`, `managed`, `java`, `android`, `apple`, `harmony`, `js`, `web`, `app`,
   `firmware`, `formats`, `radio`, `packets`, `db`, `assets`, `game`, `project`, `rebuild`, `build`,
-  `runtime`, `adb`, `frida`, `engines`, `settings`, `plugins`, `setup` (the list is
-  `registry::AREAS`).
+  `runtime`, `adb`, `frida`, `engines`, `settings`, `plugins`, `setup`, `ai` (the AI layer's
+  providers, backends and models: `ai_providers_list`, `ai_backend_add`, `ai_models_list`…) (the
+  list is `registry::AREAS`).
 - **object**: what it works on, plural for collections (`functions`, `page`, `feed`, `inbox`).
 - **action**: a plain verb (`list`, `show`, `open`, `capture`, `compare`, `start`, `answer`).
 

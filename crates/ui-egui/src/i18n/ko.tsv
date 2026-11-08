@@ -1462,3 +1462,9 @@ In this project, {kind}: {choice}.	이 프로젝트에서 {kind}: {choice}.
 Couldn't change the approvals:	승인을 바꾸지 못했습니다:
 What the builder may do without asking you, in this project.	이 프로젝트에서 빌더가 묻지 않고 해도 되는 일입니다.
 Default follows Auto mode: with it on, what can be undone goes ahead and the rest is refused; with it off, the builder asks.	기본값은 자동 모드를 따릅니다. 켜져 있으면 되돌릴 수 있는 일은 진행하고 나머지는 거부하며, 꺼져 있으면 빌더가 묻습니다.
+List AI providers	AI 제공업체 나열
+List the AIs set up	설정된 AI 나열
+Find AI on this computer	이 컴퓨터에서 AI 찾기
+Add an AI	AI 추가
+Change an AI's key	AI 키 변경
+Test an AI	AI 테스트

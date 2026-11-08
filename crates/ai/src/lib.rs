@@ -8,6 +8,7 @@
 
 pub mod agent;
 pub mod anthropic;
+pub mod backend_tools;
 pub mod cli_agents;
 pub mod config;
 pub mod context;
@@ -22,9 +23,11 @@ pub mod model;
 pub mod model_info;
 pub mod model_options;
 pub mod model_tools;
+pub mod offers;
 pub mod openai;
 pub mod price;
 pub mod prompt;
+pub mod provider_setup;
 pub mod providers;
 pub mod rebuild;
 pub mod ssh;
@@ -36,6 +39,8 @@ pub use keys::KeyStore;
 pub use locality::Locality;
 pub use model::Effort;
 pub use model_info::ModelInfo;
+pub use offers::{Billing, ProviderOffer};
+pub use provider_setup::AddedBackend;
 
 use crate::agent::{ApiConversation, EngineHost, LoopConfig, ModelSlot};
 use crate::model::{ChatModel, Delta, Msg, Stop, TurnRequest, TurnResult};
@@ -375,6 +380,7 @@ pub fn tools() -> Vec<craft_anything_engine::ToolSpec> {
     v.extend(key_tools::specs());
     v.extend(model_tools::specs());
     v.extend(model_options::specs());
+    v.extend(backend_tools::specs());
     v
 }
 
@@ -390,8 +396,12 @@ impl AiHub {
         AiHub { engine, settings_path: None, keys: KeyStore::system() }
     }
 
-    /// A hub with explicit settings file and key store (tests, portable installs).
+    /// A hub with explicit settings file and key store (tests, portable installs). The key store
+    /// goes into the session too, so the AI set-up tools use the same one.
     pub fn with_stores(engine: Arc<Engine>, settings_path: PathBuf, keys: KeyStore) -> Self {
+        if let Some(mut s) = engine.try_session() {
+            s.ext.insert(Arc::new(keys.clone()));
+        }
         AiHub { engine, settings_path: Some(settings_path), keys }
     }
 
@@ -487,41 +497,45 @@ impl AiHub {
     /// model, the first one it lists that can chat is used. Returns the model. Anthropic's own
     /// address is added as an Anthropic backend, as its API isn't OpenAI's.
     pub fn add_server(&self, name: &str, address: &str, model: Option<&str>, key: Option<String>) -> Result<String, ToolError> {
-        let name = name.trim();
-        let address = address.trim().trim_end_matches('/');
-        if name.is_empty() {
-            return Err(ToolError::invalid("A backend needs a name."));
-        }
-        if !(address.starts_with("http://") || address.starts_with("https://")) {
-            return Err(ToolError::invalid(format!("{address:?} isn't a web address."))
-                .with_remediation("Give the server's address, like http://192.168.1.20:11434/v1."));
-        }
-        let key = key.map(|k| k.trim().to_string()).filter(|k| !k.is_empty());
-        let kind = if anthropic::is_anthropic_api(address) { BackendKind::Anthropic } else { BackendKind::OpenaiCompatible };
-        let listed = if kind == BackendKind::Anthropic {
-            anthropic::Anthropic::new(Some(address), key.clone().unwrap_or_default(), "").list_models(Duration::from_secs(10))
-        } else {
-            // OpenCode Go lists its models at /v1, not under the chat path a person would paste.
-            let probe = if openai::is_opencode_go(address) { opencode_go_models_base(address) } else { address.to_string() };
-            openai::OpenAi::compatible(name, &probe, key.clone(), "").list_models(Duration::from_secs(10))
-        };
-        let models = listed.map_err(|e| {
-            let why = e.message.clone();
-            e.with_remediation(format!(
-                "Check the address (it usually ends in /v1), that the server is running and can be reached from this computer, and its key if it needs one. ({why})"
-            ))
-        })?;
-        let model = match model.map(str::trim).filter(|m| !m.is_empty()) {
-            Some(m) => m.to_string(),
-            None => detect::chat_model(&models).ok_or_else(|| {
-                let reason = if models.is_empty() { "has no models yet" } else { "doesn't list a model that can chat" };
-                ToolError::new(ErrorCode::NotFound, format!("{address} {reason}."))
-                    .with_remediation("Load a chat model on the server first, or enter the name of a chat model you know is available.")
-            })?,
-        };
-        let config = BackendConfig { name: name.to_string(), kind, model: model.clone(), base_url: Some(address.to_string()), ssh_host: None, enabled: true };
-        self.add_backend(config, key)?;
+        let key = key.filter(|k| !k.trim().is_empty());
+        let prepared = provider_setup::prepare_server(name, address, model, key, true)?;
+        let model = prepared.entry.config.model.clone();
+        self.add_backend_with(prepared.entry, prepared.key)?;
         Ok(model)
+    }
+
+    /// The providers an AI can be added from with a key ("Add a provider"). Never merged into
+    /// [`AiHub::detect`]: an offer isn't something found on this computer.
+    pub fn offers(&self) -> Vec<ProviderOffer> {
+        offers::offers()
+    }
+
+    /// Add an AI from a provider offer (`anthropic`, `openai`, `groq`… from [`AiHub::offers`]).
+    /// The key, name and model are checked before anything else; then, with `check`, the provider
+    /// lists its models for the key (at most 10 s), and a rejected key (401/403) or no answer
+    /// saves nothing. Without `check` nothing is sent anywhere (offline set-up). The key is stored
+    /// under the backend's name and never returned. `base_url` overrides the provider's address
+    /// (a proxy, or a stand-in in tests). Blocking; run it off the UI thread.
+    pub fn add_provider(
+        &self,
+        offer_id: &str,
+        name: Option<&str>,
+        key: Option<String>,
+        model: Option<&str>,
+        base_url: Option<&str>,
+        check: bool,
+    ) -> Result<AddedBackend, ToolError> {
+        let prepared = provider_setup::prepare_offer(offer_id, name, key, model, base_url, check)?;
+        provider_setup::save_added(prepared, self.config_to_change()?, &self.keys, |cfg| self.save_config(cfg))
+    }
+
+    /// Change a saved AI's key. With `check` its provider must list its models for the new key
+    /// first (at most 10 s); a rejected key keeps the old one. Returns where the key went
+    /// (`keychain` or `file`). Blocking; run it off the UI thread.
+    pub fn set_backend_key(&self, name: &str, key: &str, check: bool) -> Result<&'static str, ToolError> {
+        let entry = self.entry(name)?;
+        let key = provider_setup::prepare_key(&entry, key, check)?;
+        self.keys.set(&entry.config.name, &key)
     }
 
     /// Like [`AiHub::add_backend`], with options.
@@ -765,17 +779,7 @@ impl AiHub {
 
     /// True when a key is stored or in the environment (keys themselves are never returned).
     pub fn has_key(&self, name: &str) -> bool {
-        self.config().get(name).is_some_and(|b| {
-            let base = b.config.base_url.as_deref().unwrap_or("");
-            if b.config.kind == BackendKind::OpenaiCompatible {
-                // A local server holds no key; a hosted one is only ready once its key is somewhere.
-                if openai::is_opencode_go(base) || providers::of_base(base).is_some() {
-                    return self.keys.resolve(name, b.config.kind).is_some() || go_env_key(base).is_some() || providers::env_key(base).is_some();
-                }
-                return true;
-            }
-            !b.config.kind.needs_key() || self.keys.resolve(name, b.config.kind).is_some()
-        })
+        self.config().get(name).is_some_and(|b| provider_setup::key_ready(b, &self.keys))
     }
 
     /// This installation's OpenCode Go session id, or empty when the backend was added before one
@@ -1118,3 +1122,6 @@ fn reach(e: &BackendEntry, key: Option<String>) -> Result<u64, String> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod provider_tests;

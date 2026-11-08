@@ -585,11 +585,19 @@ would count as a local model (24k context, lean tools, $0). Decided by the maint
 2026-11-07: no environment variable for 9router's key
 (keychain or the key file only); one neutral line in docs/9router.md about subscription accounts
 behind a gateway, nothing in the UI; Gemini and Kimi stay in Detect's list; no native Gemini API.
-- [ ] Provider offers (`ai_providers_list`) and headless set-up tools (`ai_backend_add`,
+- [x] Provider offers (`ai_providers_list`) and headless set-up tools (`ai_backend_add`,
       `ai_backend_key_set`, `ai_backend_remove`, `ai_backends_list`, `ai_backends_detect`,
       `ai_backend_test`), a key checked before it's saved, CLI `ai providers`, `ai add --provider`,
       `ai key`; `ai` in `registry::AREAS`; `--kind` help names `gemini`
-      — claimed: Nope-im-not-pro, branch feature/r5.8-provider-offers-tools
+      — claimed: Nope-im-not-pro, branch feature/r5.8-provider-offers-tools. Unit and
+      stand-in-server tested; not run live
+- [ ] A `locality` field on `ai_backend_add` (and `ai add --locality`) once `Locality` lands
+- [ ] Key pages for Together, Fireworks, DeepInfra and OpenCode Go in the provider offers (left
+      out until checked), and the ones given checked against each provider's site
+- [ ] `ai_backend_test` reads the saved settings file (its call holds the session); read the
+      session's own settings once the hub can take a configuration snapshot
+- [ ] The headless-parity rows for adding, keying and removing an AI name the new tools
+      (`ai_backend_add`, `ai_backend_key_set`, `ai_backend_remove`) instead of only CLI commands
 - [ ] "Add a provider" in Settings → AI and the first run, and "Change key" on a saved API backend;
       the first run's promise text matches
 - [x] Claude client: fallback beta header only for api.anthropic.com, model info from `/v1/models`

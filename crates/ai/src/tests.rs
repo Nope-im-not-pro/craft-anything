@@ -25,20 +25,20 @@ fn opencode_go_lists_models_at_the_documented_url() {
 }
 
 #[derive(Debug, Clone)]
-struct Seen {
-    path: String,
-    headers: Vec<(String, String)>,
-    body: Value,
+pub(crate) struct Seen {
+    pub(crate) path: String,
+    pub(crate) headers: Vec<(String, String)>,
+    pub(crate) body: Value,
 }
 
 impl Seen {
-    fn header(&self, k: &str) -> Option<&str> {
+    pub(crate) fn header(&self, k: &str) -> Option<&str> {
         self.headers.iter().find(|(n, _)| n.eq_ignore_ascii_case(k)).map(|(_, v)| v.as_str())
     }
 }
 
 /// Serve canned responses `(status, content_type, body)` in order; record requests.
-fn mock(responses: Vec<(u16, &'static str, String)>) -> (String, Arc<Mutex<Vec<Seen>>>) {
+pub(crate) fn mock(responses: Vec<(u16, &'static str, String)>) -> (String, Arc<Mutex<Vec<Seen>>>) {
     let l = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}", l.local_addr().unwrap());
     let seen = Arc::new(Mutex::new(Vec::new()));

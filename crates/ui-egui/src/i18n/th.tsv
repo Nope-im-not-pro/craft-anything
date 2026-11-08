@@ -1462,3 +1462,9 @@ In this project, {kind}: {choice}.	ในโปรเจกต์นี้ {kind
 Couldn't change the approvals:	เปลี่ยนการอนุมัติไม่ได้:
 What the builder may do without asking you, in this project.	สิ่งที่ตัวสร้างทำได้โดยไม่ถามในโปรเจกต์นี้
 Default follows Auto mode: with it on, what can be undone goes ahead and the rest is refused; with it off, the builder asks.	ค่าเริ่มต้นตามโหมดอัตโนมัติ: เปิดไว้จะทำสิ่งที่ย้อนกลับได้ต่อและปฏิเสธที่เหลือ ปิดไว้ตัวสร้างจะถาม
+List AI providers	แสดงรายการผู้ให้บริการ AI
+List the AIs set up	แสดงรายการ AI ที่ตั้งค่าไว้
+Find AI on this computer	ค้นหา AI ในคอมพิวเตอร์เครื่องนี้
+Add an AI	เพิ่ม AI
+Change an AI's key	เปลี่ยนคีย์ของ AI
+Test an AI	ทดสอบ AI

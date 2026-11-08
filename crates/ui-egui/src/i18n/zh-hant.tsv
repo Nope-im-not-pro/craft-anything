@@ -1462,3 +1462,9 @@ In this project, {kind}: {choice}.	在這個專案中，{kind}：{choice}。
 Couldn't change the approvals:	無法變更審核：
 What the builder may do without asking you, in this project.	在這個專案中，建置助手不必問你就可以做的事。
 Default follows Auto mode: with it on, what can be undone goes ahead and the rest is refused; with it off, the builder asks.	預設跟隨自動模式：開啟時，可復原的操作會執行，其餘會被拒絕；關閉時，建置助手會詢問。
+List AI providers	列出 AI 供應商
+List the AIs set up	列出已設定的 AI
+Find AI on this computer	在這台電腦上尋找 AI
+Add an AI	新增 AI
+Change an AI's key	變更 AI 的金鑰
+Test an AI	測試 AI

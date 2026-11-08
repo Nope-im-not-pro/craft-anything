@@ -1462,3 +1462,9 @@ In this project, {kind}: {choice}.	ამ პროექტში {kind}: {choi
 Couldn't change the approvals:	ნებართვების შეცვლა ვერ მოხერხდა:
 What the builder may do without asking you, in this project.	რისი გაკეთება შეუძლია ამწყობს ამ პროექტში თქვენი კითხვის გარეშე.
 Default follows Auto mode: with it on, what can be undone goes ahead and the rest is refused; with it off, the builder asks.	ნაგულისხმევი ავტორეჟიმს მიჰყვება: როცა ჩართულია, რისი გაუქმებაც შეიძლება, სრულდება, დანარჩენი კი უარყოფილია; როცა გამორთულია, ამწყობი გეკითხებათ.
+List AI providers	AI პროვაიდერების სია
+List the AIs set up	დაყენებული AI-ების სია
+Find AI on this computer	AI-ის პოვნა ამ კომპიუტერზე
+Add an AI	AI-ის დამატება
+Change an AI's key	AI-ის გასაღების შეცვლა
+Test an AI	AI-ის შემოწმება

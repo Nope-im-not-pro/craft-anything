@@ -1462,3 +1462,9 @@ In this project, {kind}: {choice}.	In diesem Projekt {kind}: {choice}.
 Couldn't change the approvals:	Die Freigaben konnten nicht geändert werden:
 What the builder may do without asking you, in this project.	Was der Builder in diesem Projekt tun darf, ohne dich zu fragen.
 Default follows Auto mode: with it on, what can be undone goes ahead and the rest is refused; with it off, the builder asks.	Standard folgt dem Automatikmodus: Ist er an, geschieht, was sich rückgängig machen lässt, und der Rest wird abgelehnt; ist er aus, fragt der Builder.
+List AI providers	KI-Anbieter auflisten
+List the AIs set up	Eingerichtete KIs auflisten
+Find AI on this computer	KI auf diesem Computer finden
+Add an AI	Eine KI hinzufügen
+Change an AI's key	Den Schlüssel einer KI ändern
+Test an AI	Eine KI testen

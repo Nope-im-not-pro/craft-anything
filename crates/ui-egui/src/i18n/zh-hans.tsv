@@ -1462,3 +1462,9 @@ In this project, {kind}: {choice}.	在这个项目中，{kind}：{choice}。
 Couldn't change the approvals:	无法更改审批：
 What the builder may do without asking you, in this project.	在这个项目中，构建助手无需问你就可以做的事。
 Default follows Auto mode: with it on, what can be undone goes ahead and the rest is refused; with it off, the builder asks.	默认跟随自动模式：开启时，可撤销的操作会执行，其余的会被拒绝；关闭时，构建助手会询问。
+List AI providers	列出 AI 提供商
+List the AIs set up	列出已设置的 AI
+Find AI on this computer	在这台电脑上查找 AI
+Add an AI	添加 AI
+Change an AI's key	更改 AI 的密钥
+Test an AI	测试 AI

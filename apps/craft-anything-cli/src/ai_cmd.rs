@@ -1,4 +1,4 @@
-//! `chat` and `ai list|detect|add|test`.
+//! `chat` and `ai list|detect|providers|add|key|test|…`.
 
 use crate::output::Format;
 use crate::{Cli, INTERRUPTED, emit, fail, make_engine, out};
@@ -31,24 +31,48 @@ pub enum AiCommand {
     List,
     /// Look for keys, local servers, agent CLIs and SSH hosts.
     Detect,
-    /// Add a backend.
+    /// Providers an AI can be added from with an API key (`ai add <name> --provider <id>`).
+    Providers,
+    /// Add a backend: from a provider with its key (`--provider`, the key is checked first), or by kind.
     Add {
         name: String,
-        /// anthropic, openai, openrouter, openai_compatible, agent_cli
+        /// anthropic, openai, openrouter, gemini, openai_compatible, agent_cli
+        #[arg(long, required_unless_present = "provider", conflicts_with = "provider")]
+        kind: Option<String>,
+        /// A provider's id from `ai providers` (anthropic, openai, groq…). Its models are listed
+        /// with the key before anything is saved; a rejected key saves nothing.
         #[arg(long)]
-        kind: String,
+        provider: Option<String>,
         #[arg(long)]
         model: Option<String>,
+        /// The server's address (with --provider: another address for the same API, such as a proxy).
         #[arg(long)]
         base_url: Option<String>,
-        #[arg(long)]
+        #[arg(long, conflicts_with = "provider")]
         ssh_host: Option<String>,
         /// Read the API key from this environment variable (keys are never taken on the command line).
-        #[arg(long)]
+        #[arg(long, conflicts_with = "key_stdin")]
         key_env: Option<String>,
         /// Read the API key from stdin.
         #[arg(long)]
         key_stdin: bool,
+        /// With --provider: save without asking the provider anything (offline set-up).
+        #[arg(long, requires = "provider")]
+        no_check: bool,
+    },
+    /// Change a saved AI's API key. Its provider lists its models with the new key first, unless
+    /// --no-check; a rejected key keeps the old one.
+    Key {
+        name: String,
+        /// Read the API key from this environment variable.
+        #[arg(long, required_unless_present = "key_stdin", conflicts_with = "key_stdin")]
+        key_env: Option<String>,
+        /// Read the API key from stdin.
+        #[arg(long)]
+        key_stdin: bool,
+        /// Store it without asking the provider anything.
+        #[arg(long)]
+        no_check: bool,
     },
     /// Remove a backend.
     Remove { name: String },
@@ -236,14 +260,43 @@ pub fn ai(cli: &Cli, c: &AiCommand, f: Format) -> u8 {
             }
             0
         }
-        AiCommand::Add { name, kind, model, base_url, ssh_host, key_env, key_stdin } => {
-            let kind: BackendKind = match serde_json::from_value(json!(kind)) {
-                Ok(k) => k,
-                Err(_) => return crate::usage_error("--kind must be one of anthropic, openai, openrouter, openai_compatible, agent_cli"),
+        AiCommand::Providers => {
+            emit(&serde_json::to_value(hub.offers()).unwrap_or(Value::Null), f);
+            0
+        }
+        AiCommand::Key { name, key_env, key_stdin, no_check } => {
+            let key = match read_key(key_env, *key_stdin) {
+                Ok(Some(k)) => k,
+                Ok(None) => return crate::usage_error("give the key with --key-env or --key-stdin"),
+                Err(m) => return crate::usage_error(&m),
             };
+            match hub.set_backend_key(name, &key, !no_check) {
+                Ok(stored_in) => {
+                    emit(&json!({"name": name, "key_stored": true, "key_stored_in": stored_in, "checked": !no_check}), f);
+                    0
+                }
+                Err(e) => fail(&e, f),
+            }
+        }
+        AiCommand::Add { name, kind, provider, model, base_url, ssh_host, key_env, key_stdin, no_check } => {
             let key = match read_key(key_env, *key_stdin) {
                 Ok(k) => k,
                 Err(m) => return crate::usage_error(&m),
+            };
+            if let Some(provider) = provider {
+                return match hub.add_provider(provider, Some(name), key, model.as_deref(), base_url.as_deref(), !no_check) {
+                    Ok(added) => {
+                        emit(&json!({"added": added}), f);
+                        0
+                    }
+                    Err(e) => fail(&e, f),
+                };
+            }
+            let kind: BackendKind = match kind.as_ref().map(|k| serde_json::from_value(json!(k))) {
+                Some(Ok(k)) => k,
+                _ => {
+                    return crate::usage_error("--kind must be one of anthropic, openai, openrouter, gemini, openai_compatible, agent_cli (or use --provider)");
+                }
             };
             // A server by its address with no model named: asked for its models, and one that can chat is used.
             if let (BackendKind::OpenaiCompatible, Some(address), None) = (kind, base_url, model) {
