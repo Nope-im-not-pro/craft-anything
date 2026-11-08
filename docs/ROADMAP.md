@@ -600,6 +600,7 @@ behind a gateway, nothing in the UI; Gemini and Kimi stay in Detect's list; no n
       (`ai_backend_add`, `ai_backend_key_set`, `ai_backend_remove`) instead of only CLI commands
 - [ ] "Add a provider" in Settings → AI and the first run, and "Change key" on a saved API backend;
       the first run's promise text matches
+      — claimed: Nope-im-not-pro, branch feature/r5.8-provider-picker-ui
 - [x] Claude client: fallback beta header only for api.anthropic.com, model info from `/v1/models`
       (paged, bounded), effort and thinking only where the model has them,
       `model_context_window_exceeded` refits like a context error, a spend-limit 429 is billing,
