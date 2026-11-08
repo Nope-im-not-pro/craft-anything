@@ -33,7 +33,7 @@ pub fn specs() -> Vec<ToolSpec> {
         spec(
             "ai_providers_list",
             "List AI providers",
-            "List the providers an AI can be added from with an API key (`ai_backend_add` with `offer`): id, name, how it's paid for (`billing`), the default and suggested models, where a key is made (`key_url`) and the environment variables that usually hold it. This is not what's found on this computer (`ai_backends_detect`).",
+            "List the providers an AI can be added from with an API key (`ai_backend_add` with `offer`): id, name, how it's paid for (`billing`), the default and suggested models, where a key is made (`key_url`) and the environment variables that usually hold it. Ids are used as given (`opencode-go`). This is not what's found on this computer (`ai_backends_detect`).",
             "Shows the AI services you can add with a key.",
             Effects::READ_ONLY,
             schema_of::<NoParams>,
@@ -60,7 +60,7 @@ pub fn specs() -> Vec<ToolSpec> {
         spec(
             "ai_backend_add",
             "Add an AI",
-            "Add (or replace) an AI backend, from a provider (`offer`, an id from `ai_providers_list`) or an OpenAI-compatible server's `address`. Prefer `api_key_env` (the name of an environment variable holding the key, read where this runs) over `api_key`: a key pasted here is seen by whoever sends it. Unless `check` is false, the provider must list its models for the key first (at most 10 s); a rejected key or no answer saves nothing. Without `model` the provider's default is used when it lists it, else the first model that can chat. The key goes to the system keychain (or the private key file) under the backend's name and is never returned.",
+            "Add an AI backend, from a provider (`offer`, an id from `ai_providers_list`) or an OpenAI-compatible server's `address`. A name already set up is refused unless `replace` is true; a replaced backend keeps no old key unless a new one is given. Prefer `api_key_env` (the name of an environment variable holding the key, read where this runs) over `api_key`: a key pasted here is seen by whoever sends it. `api_key_env` takes a provider's own variable (see `ai_providers_list`) only for that provider at its own address, and otherwise only a name ending in `_API_KEY`. Unless `check` is false, the provider must list its models for the key first (at most 10 s); a rejected key or no answer saves nothing. Without `model` the provider's default is used when it lists it, else the first model that can chat. The key goes to the system keychain (or the private key file) under the backend's name and is never returned.",
             "Connects an AI with its key, after checking the key works.",
             saves_and_checks,
             schema_of::<AddParams>,
@@ -78,7 +78,7 @@ pub fn specs() -> Vec<ToolSpec> {
         spec(
             "ai_backend_remove",
             "Remove an AI",
-            "Remove an AI backend, its stored key, and its place in roles and the fallback chain. `removed` is false when there was no such backend.",
+            "Remove an AI backend, its stored key, and its place in roles and the fallback chain. `removed` is false when there was no such backend; `key_removed` is false when the backend was removed but its stored key couldn't be (it's never used by another backend).",
             "Disconnects an AI and forgets its key.",
             Effects::WRITES_FILESYSTEM,
             schema_of::<NameParams>,
@@ -87,7 +87,7 @@ pub fn specs() -> Vec<ToolSpec> {
         spec(
             "ai_backend_test",
             "Test an AI",
-            "Send an AI backend a tiny request and time it (at most 60 s); a coding agent app only runs its `--version` (`version_only`). Uses the saved settings.",
+            "Send an AI backend a tiny request and time it (at most 60 s); a coding agent app only runs its `--version` (`version_only`). Uses the settings in use.",
             "Checks that an AI answers.",
             Effects::ACCESSES_NETWORK.union(Effects::LAUNCHES_PROCESS),
             schema_of::<NameParams>,
@@ -135,6 +135,10 @@ pub struct AddParams {
     /// without any request (offline set-up; with `address` a model must be named).
     #[serde(default)]
     pub check: Option<bool>,
+    /// Replace a backend of the same name (default false: refused). Its stored key is dropped
+    /// unless a new one is given.
+    #[serde(default)]
+    pub replace: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -153,8 +157,39 @@ pub struct KeyParams {
     pub check: Option<bool>,
 }
 
-/// The key given as `api_key` or read from `api_key_env`; never both.
-fn key_param(api_key: Option<String>, api_key_env: Option<&str>) -> Result<Option<String>, ToolError> {
+/// The provider offer whose own address a backend of `kind` at `base` uses, if any.
+fn own_offer(kind: BackendKind, base: Option<&str>) -> Option<offers::ProviderOffer> {
+    let base = base.map(|b| b.trim().trim_end_matches('/')).filter(|b| !b.is_empty());
+    offers::offers().into_iter().find(|o| o.kind == kind && o.base_url.as_deref().map(|b| b.trim_end_matches('/')) == base)
+}
+
+/// An environment variable's value is sent with the key check and stored, so not every variable
+/// may be read: a provider's own (from its offer) only goes to that provider at its own address
+/// (`own`), and otherwise only a name ending in `_API_KEY` that isn't a provider's. Anything else
+/// (`GITHUB_TOKEN`) could be another secret. Checked before anything is read or sent.
+fn env_allowed(var: &str, own: Option<&offers::ProviderOffer>) -> Result<(), ToolError> {
+    let upper = var.to_ascii_uppercase();
+    let is = |v: &String| v.eq_ignore_ascii_case(&upper);
+    if own.is_some_and(|o| o.key_env.iter().any(is)) {
+        return Ok(());
+    }
+    let fix = "Put the key in a variable named like MY_SERVER_API_KEY, or give it as `api_key`.";
+    if let Some(owner) = offers::offers().into_iter().find(|o| o.key_env.iter().any(is)) {
+        return Err(
+            ToolError::invalid(format!("{var} holds {}'s key, so it's only sent to {} at its own address.", owner.name, owner.name)).with_remediation(fix)
+        );
+    }
+    if !upper.ends_with("_API_KEY") {
+        return Err(
+            ToolError::invalid(format!("Only a variable whose name ends in _API_KEY is read for a key; {var} may hold another secret.")).with_remediation(fix)
+        );
+    }
+    Ok(())
+}
+
+/// The key given as `api_key` or read from `api_key_env`; never both. `own` is the provider whose
+/// own address the key goes to, if any ([`env_allowed`]).
+fn key_param(api_key: Option<String>, api_key_env: Option<&str>, own: Option<&offers::ProviderOffer>) -> Result<Option<String>, ToolError> {
     match (api_key, api_key_env.map(str::trim).filter(|v| !v.is_empty())) {
         (Some(_), Some(_)) => Err(ToolError::invalid("Give `api_key` or `api_key_env`, not both.")),
         (Some(k), None) => Ok(Some(k)),
@@ -162,6 +197,7 @@ fn key_param(api_key: Option<String>, api_key_env: Option<&str>) -> Result<Optio
             if var.len() > 128 || !var.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
                 return Err(ToolError::invalid("`api_key_env` is the name of an environment variable, like ANTHROPIC_API_KEY."));
             }
+            env_allowed(var, own)?;
             match std::env::var(var).ok().filter(|k| !k.trim().is_empty()) {
                 Some(k) => Ok(Some(k)),
                 None => Err(ToolError::invalid(format!("The environment variable {var} isn't set where Craft Anything runs."))
@@ -219,9 +255,11 @@ fn ai_backends_detect(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOutput, To
 
 fn ai_backend_add(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOutput, ToolError> {
     let p: AddParams = parse_params(params)?;
-    let key = key_param(p.api_key, p.api_key_env.as_deref())?;
-    let check = p.check.unwrap_or(true);
     let blank = |s: &Option<String>| s.as_deref().is_none_or(|s| s.trim().is_empty());
+    // Only an offer at its own address may read that provider's variable.
+    let own = if blank(&p.address) && blank(&p.base_url) { p.offer.as_deref().and_then(offers::offer) } else { None };
+    let key = key_param(p.api_key, p.api_key_env.as_deref(), own.as_ref())?;
+    let check = p.check.unwrap_or(true);
     let prepared = match (p.offer.as_deref().filter(|_| !blank(&p.offer)), p.address.as_deref().filter(|_| !blank(&p.address))) {
         (Some(offer), None) => provider_setup::prepare_offer(offer, p.name.as_deref(), key, p.model.as_deref(), p.base_url.as_deref(), check)?,
         (None, Some(address)) => {
@@ -235,16 +273,18 @@ fn ai_backend_add(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOutput, ToolEr
     };
     let cfg = AiConfig::from_table(&ctx.session.settings.ai)?;
     let keys = key_store(ctx.session);
-    let added = provider_setup::save_added(prepared, cfg, &keys, |cfg| save_in_session(ctx.session, cfg))?;
+    let added = provider_setup::save_added(prepared, cfg, &keys, p.replace.unwrap_or(false), |cfg| save_in_session(ctx.session, cfg))?;
     Ok(ToolOutput::Value(serde_json::to_value(added).map_err(|e| ToolError::internal(e.to_string()))?))
 }
 
 fn ai_backend_key_set(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOutput, ToolError> {
     let p: KeyParams = parse_params(params)?;
-    let key = key_param(p.api_key, p.api_key_env.as_deref())?.ok_or_else(|| ToolError::invalid("Give the key as `api_key_env` (preferred) or `api_key`."))?;
     let check = p.check.unwrap_or(true);
     let cfg = AiConfig::from_table(&ctx.session.settings.ai)?;
     let entry = cfg.get(&p.name).ok_or_else(|| no_backend(&p.name))?;
+    let own = own_offer(entry.config.kind, entry.config.base_url.as_deref()).filter(|_| entry.config.ssh_host.as_deref().is_none_or(|h| h.trim().is_empty()));
+    let key = key_param(p.api_key, p.api_key_env.as_deref(), own.as_ref())?
+        .ok_or_else(|| ToolError::invalid("Give the key as `api_key_env` (preferred) or `api_key`."))?;
     let key = provider_setup::prepare_key(entry, &key, check)?;
     let stored_in = key_store(ctx.session).set(&entry.config.name, &key)?;
     Ok(ToolOutput::Value(json!({"name": entry.config.name, "key_stored": true, "key_stored_in": stored_in, "checked": check})))
@@ -256,27 +296,27 @@ fn ai_backend_remove(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOutput, Too
     if cfg.get(&p.name).is_none() {
         return Ok(ToolOutput::Value(json!({"name": p.name, "removed": false})));
     }
-    // The key first: if it can't be removed the backend stays, so this can be tried again.
-    key_store(ctx.session).delete(&p.name)?;
+    // The settings first: a key left behind is harmless (a backend added later under the name never
+    // inherits it), a backend left without its key isn't.
     cfg.remove(&p.name);
     save_in_session(ctx.session, &cfg)?;
-    Ok(ToolOutput::Value(json!({"name": p.name, "removed": true})))
+    Ok(ToolOutput::Value(match key_store(ctx.session).delete(&p.name) {
+        Ok(()) => json!({"name": p.name, "removed": true, "key_removed": true}),
+        Err(e) => json!({"name": p.name, "removed": true, "key_removed": false, "key_error": e.message}),
+    }))
 }
 
 fn ai_backend_test(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOutput, ToolError> {
     let p: NameParams = parse_params(params)?;
-    if AiConfig::from_table(&ctx.session.settings.ai)?.get(&p.name).is_none() {
-        return Err(no_backend(&p.name));
-    }
+    let entry = AiConfig::from_table(&ctx.session.settings.ai)?.get(&p.name).cloned().ok_or_else(|| no_backend(&p.name))?;
     let engine = ctx
         .session
         .ext
         .get::<EngineRef>()
         .and_then(|r| r.0.upgrade())
         .ok_or_else(|| ToolError::new(ErrorCode::FeatureMissing, "Testing an AI isn't available in this engine."))?;
-    // The session is held by this call, so the hub reads the saved settings file (which every
-    // change is saved to before the session is updated), never the session.
+    // The session is held by this call, so the entry comes from it and the hub never reads it.
     let hub = AiHub::with_stores(engine, ctx.session.config_dir().join("config.toml"), key_store(ctx.session));
-    let report = hub.test_backend(&p.name)?;
+    let report = hub.test_entry(&entry)?;
     Ok(ToolOutput::Value(serde_json::to_value(report).map_err(|e| ToolError::internal(e.to_string()))?))
 }

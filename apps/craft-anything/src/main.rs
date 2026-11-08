@@ -54,6 +54,7 @@ fn main() -> eframe::Result {
     layer_tools.extend(craft_anything_setup::tools::specs());
     let engine = Engine::shared_with(session, layer_tools, plugins);
     let hub = Arc::new(AiHub::new(engine.clone()));
+    hub.install_key_store();
     log::info!("engine and AI ready; opening the window");
 
     let viewport = eframe::egui::ViewportBuilder::default()

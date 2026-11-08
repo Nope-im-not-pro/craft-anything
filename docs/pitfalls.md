@@ -635,6 +635,19 @@ the AI and its role while nothing was saved, and the error sat in the message ba
 window. Save to disk first and change memory only after it worked; replace files with a short retry
 on Windows (`write_atomic`); show errors where the person is looking.
 
+**A key kept by name, sent to whatever took the name.** Keys are stored under a backend's name;
+`ai_backend_add` replaced a backend of the same name and kept the stored key when none was given,
+so adding "Claude" with another address sent the person's Claude key there on the next test, and
+`api_key_env` read any variable (`GITHUB_TOKEN`) and sent it to any address. A name already in use
+is refused unless replaced, a backend added without a key never inherits one, a provider's own key
+variable goes only to that provider's address, and other variables must end in `_API_KEY`.
+
+**A constructor that installed what it was given.** `AiHub::with_stores` put its key store into the
+session; the rebuild poll made a hub with the system's store every few seconds, so a test's or the
+demo's key file was replaced and the AI tools wrote to the real keychain. Constructors change
+nothing shared: the app installs its store once (`AiHub::install_key_store`), and a session with
+its own config folder falls back to a key file there, never the keychain.
+
 **Showing settings shows their secrets.** `settings_show` returned the whole settings, plugins'
 `env` values included, which can hold API keys; a tool's output reaches the journal and MCP
 clients. The journal only redacts by field name. When a setting can hold a secret, hide its value

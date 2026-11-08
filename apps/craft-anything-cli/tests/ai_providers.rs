@@ -38,6 +38,15 @@ fn the_claude_api_is_added_from_the_cli_with_a_key_on_stdin() {
     let list: Value = serde_json::from_slice(&cli(&["ai", "list", "--format", "json"], cfg.path(), b"").stdout).unwrap();
     assert_eq!(list[0]["key_stored"], true, "{list}");
 
+    // The same name again is refused unless replaced, and a replace without a key keeps none.
+    let again = ["ai", "add", "Claude", "--provider", "anthropic", "--base-url", "http://127.0.0.1:0", "--no-check"];
+    assert!(!cli(&again, cfg.path(), b"").success);
+    assert!(std::fs::read_to_string(cfg.path().join("ai-keys.toml")).unwrap().contains("sk-test-cli"));
+    assert!(cli(&[&again[..], &["--replace"]].concat(), cfg.path(), b"").success);
+    assert!(!std::fs::read_to_string(cfg.path().join("ai-keys.toml")).unwrap_or_default().contains("sk-test-cli"));
+    assert!(cli(&["ai", "add", "Claude", "--provider", "anthropic", "--key-stdin", "--no-check", "--replace"], cfg.path(), b"sk-test-cli\n").success);
+    let saved = std::fs::read_to_string(cfg.path().join("config.toml")).unwrap();
+
     // A checked key with no answer keeps the old one, and a bad key is refused before anything.
     let before = std::fs::read(cfg.path().join("ai-keys.toml")).unwrap();
     let moved = saved.replacen("kind = \"anthropic\"", "kind = \"anthropic\"\nbase_url = \"http://127.0.0.1:0\"", 1);

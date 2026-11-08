@@ -594,8 +594,8 @@ behind a gateway, nothing in the UI; Gemini and Kimi stay in Detect's list; no n
 - [ ] A `locality` field on `ai_backend_add` (and `ai add --locality`) once `Locality` lands
 - [ ] Key pages for Together, Fireworks, DeepInfra and OpenCode Go in the provider offers (left
       out until checked), and the ones given checked against each provider's site
-- [ ] `ai_backend_test` reads the saved settings file (its call holds the session); read the
-      session's own settings once the hub can take a configuration snapshot
+- [x] `ai_backend_test` tests the backend as the session has it (`AiHub::test_entry`), not as
+      the saved settings file has it
 - [ ] The headless-parity rows for adding, keying and removing an AI name the new tools
       (`ai_backend_add`, `ai_backend_key_set`, `ai_backend_remove`) instead of only CLI commands
 - [ ] "Add a provider" in Settings → AI and the first run, and "Change key" on a saved API backend;

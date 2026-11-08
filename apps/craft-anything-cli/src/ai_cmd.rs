@@ -59,6 +59,10 @@ pub enum AiCommand {
         /// With --provider: save without asking the provider anything (offline set-up).
         #[arg(long, requires = "provider")]
         no_check: bool,
+        /// With --provider: replace a backend of the same name (its stored key is dropped unless a
+        /// new one is given). Without it, a name already set up is refused.
+        #[arg(long, requires = "provider")]
+        replace: bool,
     },
     /// Change a saved AI's API key. Its provider lists its models with the new key first, unless
     /// --no-check; a rejected key keeps the old one.
@@ -117,7 +121,9 @@ pub enum AiCommand {
 }
 
 fn hub(cli: &Cli) -> Result<AiHub, ToolError> {
-    Ok(AiHub::new(make_engine(cli.project.as_deref(), cli.deep_for_run())?))
+    let hub = AiHub::new(make_engine(cli.project.as_deref(), cli.deep_for_run())?);
+    hub.install_key_store();
+    Ok(hub)
 }
 
 fn write_raw(s: &str) {
@@ -278,13 +284,13 @@ pub fn ai(cli: &Cli, c: &AiCommand, f: Format) -> u8 {
                 Err(e) => fail(&e, f),
             }
         }
-        AiCommand::Add { name, kind, provider, model, base_url, ssh_host, key_env, key_stdin, no_check } => {
+        AiCommand::Add { name, kind, provider, model, base_url, ssh_host, key_env, key_stdin, no_check, replace } => {
             let key = match read_key(key_env, *key_stdin) {
                 Ok(k) => k,
                 Err(m) => return crate::usage_error(&m),
             };
             if let Some(provider) = provider {
-                return match hub.add_provider(provider, Some(name), key, model.as_deref(), base_url.as_deref(), !no_check) {
+                return match hub.add_provider(provider, Some(name), key, model.as_deref(), base_url.as_deref(), !no_check, *replace) {
                     Ok(added) => {
                         emit(&json!({"added": added}), f);
                         0

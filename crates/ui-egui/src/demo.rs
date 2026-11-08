@@ -125,6 +125,7 @@ pub fn app(engine: Arc<Engine>) -> CraftApp {
     let store = std::env::temp_dir().join(format!("craft-anything-demo-{now}-{}", N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
     let keys = craft_anything_ai::KeyStore::file_only(store.join("keys.toml"));
     let hub = Arc::new(AiHub::with_stores(engine.clone(), store.join("config.toml"), keys));
+    hub.install_key_store();
     let mut app = CraftApp::new(engine, hub);
     app.persist = false;
     app.headless = true;

@@ -297,23 +297,36 @@ pub fn prepare_server(name: &str, address: &str, model: Option<&str>, key: Optio
     })
 }
 
-/// Store the prepared key under the backend's name, put the backend in `cfg` and `save` it. A save
-/// that fails puts the key back as it was, so nothing is left half-added.
+/// Store the prepared key under the backend's name, put the backend in `cfg` and `save` it. A name
+/// that's already set up is refused unless `replace`. Keys are stored by name, so a backend added
+/// without a key never inherits one stored under its name (an old backend's, or one left behind by
+/// a removal): it would be sent to the new address. A save that fails puts the key back as it was,
+/// so nothing is left half-added.
 pub fn save_added(
     prepared: Prepared,
     mut cfg: AiConfig,
     keys: &KeyStore,
+    replace: bool,
     save: impl FnOnce(&AiConfig) -> Result<(), ToolError>,
 ) -> Result<AddedBackend, ToolError> {
     let Prepared { entry, key, offer, checked, models_listed } = prepared;
     let name = entry.config.name.clone();
+    if !replace && cfg.get(&name).is_some() {
+        let shown: String = name.chars().take(100).collect();
+        return Err(ToolError::invalid(format!("An AI named {shown:?} is already set up."))
+            .with_remediation("Give the new one another name, or replace it (`replace: true`, or `--replace` in the CLI); its stored key is then dropped unless a new one is given."));
+    }
     // OpenCode Go's session id is made here, where saving the settings is already the job.
     if cfg.install_id.as_deref().is_none_or(|s| s.trim().is_empty()) && openai::is_opencode_go(entry.config.base_url.as_deref().unwrap_or("")) {
         cfg.install_id = Some(crate::new_session_id());
     }
-    let before = key.as_ref().map(|_| keys.get(&name));
+    let before = keys.get(&name);
     let stored_in = match &key {
         Some(k) => Some(keys.set(&name, k)?),
+        None if before.is_some() => {
+            keys.delete(&name)?;
+            None
+        }
         None => None,
     };
     let added = AddedBackend {
@@ -330,10 +343,10 @@ pub fn save_added(
     cfg.upsert(entry);
     if let Err(e) = save(&cfg) {
         match before {
-            Some(Some(old)) => {
+            Some(old) => {
                 let _ = keys.set(&name, &old);
             }
-            Some(None) => {
+            None if key.is_some() => {
                 let _ = keys.delete(&name);
             }
             None => {}
@@ -386,10 +399,15 @@ pub(crate) fn key_ready(b: &BackendEntry, keys: &KeyStore) -> bool {
     !b.config.kind.needs_key() || keys.resolve(name, b.config.kind).is_some()
 }
 
-/// The key store a tool uses: the one the session was given (tests, a portable install), else the
-/// system's.
+/// The key store a tool uses: the one the app installed ([`crate::AiHub::install_key_store`]),
+/// else the system's for a session that uses the person's own config folder, else a key file in
+/// the session's own config folder (a test or isolated session never reaches the keychain).
 pub(crate) fn key_store(session: &Session) -> KeyStore {
-    session.ext.get::<KeyStore>().map(|k| k.as_ref().clone()).unwrap_or_else(KeyStore::system)
+    if let Some(k) = session.ext.get::<KeyStore>() {
+        return k.as_ref().clone();
+    }
+    let dir = session.config_dir();
+    if dir == craft_anything_engine::settings::config_dir() { KeyStore::system() } else { KeyStore::file_only(dir.join("ai-keys.toml")) }
 }
 
 /// Save `cfg` as the session's `[ai]` settings: the settings file first, then the session, so a
@@ -445,6 +463,53 @@ mod tests {
         );
         assert!(prepare_server("Box", "http://127.0.0.1:0/v1", None, None, false).is_err(), "a model is needed");
         assert_eq!(prepare_server("Box", "https://api.anthropic.com", Some("m"), None, false).unwrap().entry.config.kind, BackendKind::Anthropic);
+    }
+
+    /// Keys are stored by name: a name already set up is refused unless replaced, a backend added
+    /// without a key never inherits the one stored under its name, and a failed save puts the
+    /// stored key back as it was.
+    #[test]
+    fn an_added_backend_never_inherits_a_stored_key() {
+        let d = tempfile::tempdir().unwrap();
+        let keys = KeyStore::file_only(d.path().join("keys.toml"));
+        let evil = || prepare_server("Claude", "http://127.0.0.1:0/v1", Some("m"), None, false).unwrap();
+        let mut cfg = AiConfig::default();
+        cfg.upsert(prepare_offer("anthropic", None, None, None, None, false).unwrap().entry);
+        keys.set("Claude", "sk-test-old").unwrap();
+        let ok = |_: &AiConfig| Ok(());
+        let e = save_added(evil(), cfg.clone(), &keys, false, ok).unwrap_err();
+        assert_eq!(e.code, ErrorCode::BadInput);
+        assert!(e.remediation.unwrap().contains("replace"));
+        assert_eq!(keys.get("Claude").as_deref(), Some("sk-test-old"), "refused: nothing changed");
+
+        let failing = |_: &AiConfig| Err(ToolError::internal("disk full"));
+        assert!(save_added(evil(), cfg.clone(), &keys, true, failing).is_err());
+        assert_eq!(keys.get("Claude").as_deref(), Some("sk-test-old"), "a failed replace puts the key back");
+        let mut new_key = evil();
+        new_key.key = Some("sk-test-new".into());
+        assert!(save_added(new_key.clone(), cfg.clone(), &keys, true, failing).is_err());
+        assert_eq!(keys.get("Claude").as_deref(), Some("sk-test-old"), "a failed replace with a key puts the old one back");
+
+        let added = save_added(evil(), cfg.clone(), &keys, true, ok).unwrap();
+        assert!(!added.key_stored);
+        assert_eq!(keys.get("Claude"), None, "a replace without a key drops the old one");
+        keys.set("Claude", "sk-test-old").unwrap();
+        assert!(save_added(new_key, cfg, &keys, true, ok).unwrap().key_stored);
+        assert_eq!(keys.get("Claude").as_deref(), Some("sk-test-new"));
+
+        // A key left behind under a name nobody uses any more isn't picked up by a new backend.
+        keys.set("Ghost", "sk-test-left").unwrap();
+        let ghost = prepare_server("Ghost", "http://127.0.0.1:0/v1", Some("m"), None, false).unwrap();
+        save_added(ghost, AiConfig::default(), &keys, false, ok).unwrap();
+        assert_eq!(keys.get("Ghost"), None);
+    }
+
+    /// A session with its own config folder and no store installed never reaches the keychain.
+    #[test]
+    fn an_isolated_session_keeps_its_keys_in_its_own_folder() {
+        let session = craft_anything_engine::testing::session();
+        let store = format!("{:?}", key_store(&session));
+        assert!(store.contains("use_keychain: false") && store.contains(&format!("{:?}", session.config_dir().join("ai-keys.toml"))), "{store}");
     }
 
     /// A connection refused (port 0) saves nothing and says how to save without the check.

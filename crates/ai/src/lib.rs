@@ -396,13 +396,19 @@ impl AiHub {
         AiHub { engine, settings_path: None, keys: KeyStore::system() }
     }
 
-    /// A hub with explicit settings file and key store (tests, portable installs). The key store
-    /// goes into the session too, so the AI set-up tools use the same one.
+    /// A hub with explicit settings file and key store (tests, portable installs). It changes
+    /// nothing in the session: hubs are made for a moment in many places (rebuild polls, tools),
+    /// and one made with another store must not replace the app's. See
+    /// [`AiHub::install_key_store`].
     pub fn with_stores(engine: Arc<Engine>, settings_path: PathBuf, keys: KeyStore) -> Self {
-        if let Some(mut s) = engine.try_session() {
-            s.ext.insert(Arc::new(keys.clone()));
-        }
         AiHub { engine, settings_path: Some(settings_path), keys }
+    }
+
+    /// Give the engine's session this hub's key store, so the AI set-up tools (`ai_backend_add`…)
+    /// use the same one. Called once where an app builds its hub (desktop, CLI, demo, tests);
+    /// waits for the session.
+    pub fn install_key_store(&self) {
+        self.engine.session().ext.insert(Arc::new(self.keys.clone()));
     }
 
     fn settings_path(&self) -> PathBuf {
@@ -515,7 +521,9 @@ impl AiHub {
     /// lists its models for the key (at most 10 s), and a rejected key (401/403) or no answer
     /// saves nothing. Without `check` nothing is sent anywhere (offline set-up). The key is stored
     /// under the backend's name and never returned. `base_url` overrides the provider's address
-    /// (a proxy, or a stand-in in tests). Blocking; run it off the UI thread.
+    /// (a proxy, or a stand-in in tests). A name already set up is refused unless `replace`; a
+    /// replaced backend keeps no old key. Blocking; run it off the UI thread.
+    #[allow(clippy::too_many_arguments)]
     pub fn add_provider(
         &self,
         offer_id: &str,
@@ -524,9 +532,10 @@ impl AiHub {
         model: Option<&str>,
         base_url: Option<&str>,
         check: bool,
+        replace: bool,
     ) -> Result<AddedBackend, ToolError> {
         let prepared = provider_setup::prepare_offer(offer_id, name, key, model, base_url, check)?;
-        provider_setup::save_added(prepared, self.config_to_change()?, &self.keys, |cfg| self.save_config(cfg))
+        provider_setup::save_added(prepared, self.config_to_change()?, &self.keys, replace, |cfg| self.save_config(cfg))
     }
 
     /// Change a saved AI's key. With `check` its provider must list its models for the new key
@@ -989,7 +998,13 @@ impl AiHub {
     /// Send a tiny request and time it; a coding agent only runs `--version`, so its report says
     /// `version_only`. Blocking (bounded); run it off the UI thread.
     pub fn test_backend(&self, name: &str) -> Result<TestReport, ToolError> {
-        let e = self.entry(name)?;
+        self.test_entry(&self.entry(name)?)
+    }
+
+    /// Like [`AiHub::test_backend`], for an entry the caller already has (a tool reads it from the
+    /// session its call holds).
+    pub fn test_entry(&self, e: &BackendEntry) -> Result<TestReport, ToolError> {
+        let name = e.config.name.as_str();
         let start = Instant::now();
         if e.config.kind == BackendKind::AgentCli {
             let program = cli_agents::program_of(&e.config, &e.options)?;
@@ -1008,7 +1023,7 @@ impl AiHub {
                 program: Some(program),
             });
         }
-        let mut slot = self.build_model(&e)?;
+        let mut slot = self.build_model(e)?;
         let stop = Stop::default();
         let (tx, rx) = std::sync::mpsc::channel();
         // A hard bound even if the server trickles bytes forever.
