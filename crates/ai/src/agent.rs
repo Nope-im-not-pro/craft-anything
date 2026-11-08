@@ -651,9 +651,9 @@ impl AgentLoop {
                 // Text already shown stays, so a reply that streamed some is kept as cut off instead.
                 Ok(r) if r.stop == StopReason::ContextWindow && !refitted && !produced => {
                     refitted = true;
-                    let (name, local) = (slot.name.clone(), slot.local);
+                    let (name, locality) = (slot.name.clone(), slot.locality);
                     let input = r.usage.input_tokens.saturating_add(r.usage.cache_read_tokens).saturating_add(r.usage.cache_write_tokens);
-                    let cost = price::cost(&r.model, &r.usage, &self.cfg.prices, local);
+                    let cost = price::cost(&r.model, &r.usage, &self.cfg.prices, locality);
                     self.meter.add(r.usage, cost);
                     msg_usage.add(r.usage);
                     *msg_cost = match (*msg_cost, cost) {
@@ -1101,6 +1101,7 @@ pub(crate) mod tests {
             failure: Arc::default(),
             failed_builds: 0,
             server_windows: BTreeMap::new(),
+            answer_room: BTreeMap::new(),
         }
     }
 
@@ -1795,7 +1796,8 @@ pub(crate) mod tests {
         let host = Arc::new(FakeHost { calls: Mutex::default(), journal: Mutex::default() });
         let seen = Arc::new(Mutex::new(Vec::new()));
         let model = Scripted { turns: VecDeque::from(turns), seen: seen.clone() };
-        let chain = vec![ModelSlot { name: "Claude".into(), model: Box::new(model), local: false, effort: None, max_turns: 5, context_tokens: 0 }];
+        let chain =
+            vec![ModelSlot { name: "Claude".into(), model: Box::new(model), locality: Locality::Hosted, effort: None, max_turns: 5, context_tokens: 0 }];
         let mut conversation = ApiConversation::start(host.clone(), chain, LoopConfig { transcript: Some(transcript), ..Default::default() }).unwrap();
         conversation.send("continue");
         let events = drain_until_done(&mut conversation, |_, _| {});
