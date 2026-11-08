@@ -1289,7 +1289,7 @@ Write the brief	เขียนบรีฟ
 Write the handoff	เขียนเอกสารส่งต่อ
 Wrote {what} to {}	เขียน {what} ลง {}
 You answered: {a}	คุณตอบ: {a}
-You can add a Claude, ChatGPT or OpenRouter key, a local model (Ollama, LM Studio) or an agent you already use, later in Settings → AI.	เพิ่มคีย์ Claude, ChatGPT หรือ OpenRouter โมเดลในเครื่อง (Ollama, LM Studio) หรือเอเจนต์ที่ใช้อยู่ ทีหลังได้ในการตั้งค่า → AI
+Add a Claude, ChatGPT or OpenRouter key under Add a provider below, a local model by its address, or an agent you already use. Settings → AI has the same.	เพิ่มคีย์ Claude, ChatGPT หรือ OpenRouter ได้ที่เพิ่มผู้ให้บริการด้านล่าง เพิ่มโมเดลในเครื่องด้วยที่อยู่ หรือเอเจนต์ที่ใช้อยู่ การตั้งค่า → AI ก็ทำได้เช่นกัน
 You chose:	คุณเลือก:
 You're all set	พร้อมแล้ว
 Your app is ready	แอปของคุณพร้อมแล้ว
@@ -1468,3 +1468,17 @@ Find AI on this computer	ค้นหา AI ในคอมพิวเตอร
 Add an AI	เพิ่ม AI
 Change an AI's key	เปลี่ยนคีย์ของ AI
 Test an AI	ทดสอบ AI
+Change key	เปลี่ยนคีย์
+Save key	บันทึกคีย์
+New key saved for {name}	บันทึกคีย์ใหม่ของ {name} แล้ว
+Change {name}'s key	เปลี่ยนคีย์ของ {name}
+Pay per use	จ่ายตามการใช้
+Free key	คีย์ฟรี
+Monthly plan	แพ็กเกจรายเดือน
+On your computer	บนคอมพิวเตอร์ของคุณ
+Billing unknown	ไม่ทราบการคิดค่าบริการ
+Add a provider	เพิ่มผู้ให้บริการ
+An AI service you have a key for. The key is checked with the provider before it's saved.	บริการ AI ที่คุณมีคีย์ คีย์จะถูกตรวจสอบกับผู้ให้บริการก่อนบันทึก
+Choose a provider	เลือกผู้ให้บริการ
+Provider	ผู้ให้บริการ
+Get a key	รับคีย์

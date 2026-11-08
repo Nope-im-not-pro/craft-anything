@@ -1289,7 +1289,7 @@ Write the brief	Napsat zadání
 Write the handoff	Napsat předávací zprávu
 Wrote {what} to {}	Zapsáno {what} do {}
 You answered: {a}	Vaše odpověď: {a}
-You can add a Claude, ChatGPT or OpenRouter key, a local model (Ollama, LM Studio) or an agent you already use, later in Settings → AI.	Klíč Claude, ChatGPT nebo OpenRouter, místní model (Ollama, LM Studio) či agenta, kterého již používáte, můžete později přidat v Nastavení → AI.
+Add a Claude, ChatGPT or OpenRouter key under Add a provider below, a local model by its address, or an agent you already use. Settings → AI has the same.	Níže v části Přidat poskytovatele přidáte klíč Claude, ChatGPT nebo OpenRouter, místní model podle adresy nebo agenta, kterého již používáte. Totéž nabízí Nastavení → AI.
 You chose:	Vaše volba:
 You're all set	Vše je připraveno
 Your app is ready	Vaše aplikace je hotová
@@ -1468,3 +1468,17 @@ Find AI on this computer	Najít AI v tomto počítači
 Add an AI	Přidat AI
 Change an AI's key	Změnit klíč AI
 Test an AI	Otestovat AI
+Change key	Změnit klíč
+Save key	Uložit klíč
+New key saved for {name}	Nový klíč pro {name} uložen
+Change {name}'s key	Změnit klíč pro {name}
+Pay per use	Platba za použití
+Free key	Bezplatný klíč
+Monthly plan	Měsíční předplatné
+On your computer	Na vašem počítači
+Billing unknown	Účtování neznámé
+Add a provider	Přidat poskytovatele
+An AI service you have a key for. The key is checked with the provider before it's saved.	Služba AI, ke které máte klíč. Klíč se před uložením ověří u poskytovatele.
+Choose a provider	Vyberte poskytovatele
+Provider	Poskytovatel
+Get a key	Získat klíč

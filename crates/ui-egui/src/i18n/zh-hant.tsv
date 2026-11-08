@@ -1289,7 +1289,7 @@ Write the brief	撰寫需求簡報
 Write the handoff	撰寫交接說明
 Wrote {what} to {}	已將{what}寫入 {}
 You answered: {a}	你的回答：{a}
-You can add a Claude, ChatGPT or OpenRouter key, a local model (Ollama, LM Studio) or an agent you already use, later in Settings → AI.	之後可以在「設定 → AI」中新增 Claude、ChatGPT 或 OpenRouter 金鑰、本機模型 (Ollama、LM Studio)，或你正在使用的代理程式。
+Add a Claude, ChatGPT or OpenRouter key under Add a provider below, a local model by its address, or an agent you already use. Settings → AI has the same.	在下方「新增提供者」中新增 Claude、ChatGPT 或 OpenRouter 金鑰，依位址新增本機模型，或新增你正在使用的代理程式。「設定 → AI」中也可以這樣做。
 You chose:	你的選擇：
 You're all set	準備就緒
 Your app is ready	你的應用程式已就緒
@@ -1468,3 +1468,17 @@ Find AI on this computer	在這台電腦上尋找 AI
 Add an AI	新增 AI
 Change an AI's key	變更 AI 的金鑰
 Test an AI	測試 AI
+Change key	變更金鑰
+Save key	儲存金鑰
+New key saved for {name}	已為 {name} 儲存新金鑰
+Change {name}'s key	變更 {name} 的金鑰
+Pay per use	按用量付費
+Free key	免費金鑰
+Monthly plan	月費方案
+On your computer	在你的電腦上
+Billing unknown	計費方式不明
+Add a provider	新增提供者
+An AI service you have a key for. The key is checked with the provider before it's saved.	你有金鑰的 AI 服務。儲存前會先向提供者驗證金鑰。
+Choose a provider	選擇提供者
+Provider	提供者
+Get a key	取得金鑰

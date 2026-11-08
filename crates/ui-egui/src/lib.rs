@@ -236,6 +236,11 @@ pub enum Done {
         /// `CraftApp::backend_choices` when the add started: a choice made since then stands.
         choices: u64,
     },
+    /// A saved AI's key was changed (or the new key was refused).
+    KeyChanged {
+        name: String,
+        result: Result<(), ToolError>,
+    },
     /// The projects folder was listed.
     Projects(Vec<craft_anything_engine::workspace::Workspace>),
     /// A new project's folder was made (see `CraftApp::start_make`).
@@ -279,6 +284,33 @@ pub struct ServerForm {
     /// Empty: the first model it lists that can chat.
     pub model: String,
     pub key: String,
+}
+
+/// Settings → AI's "Add a provider" form: an AI from one of the provider offers, with its key.
+#[derive(Debug, Clone, Default)]
+pub struct ProviderForm {
+    /// The chosen offer's id; empty until one is picked.
+    pub offer: String,
+    pub name: String,
+    pub key: String,
+    /// Empty: the provider's default model.
+    pub model: String,
+    /// Another address for the provider than its own (a stand-in server in tests). Not shown.
+    pub base_url: Option<String>,
+    /// The name being added while its job runs.
+    pub adding: Option<String>,
+    /// Why the last add failed, shown under the form.
+    pub error: Option<String>,
+}
+
+/// A saved AI's new key, typed in Settings → AI ("Change key").
+#[derive(Debug, Clone, Default)]
+pub struct KeyChange {
+    pub name: String,
+    pub key: String,
+    /// The key is being checked and saved.
+    pub saving: bool,
+    pub error: Option<String>,
 }
 
 /// What a file dialog was for.
@@ -460,6 +492,12 @@ pub struct CraftApp {
     /// Settings → AI's "Add an AI by its address" form. Not kept with the UI state: its key goes
     /// only to the keychain.
     pub server_form: ServerForm,
+    /// Settings → AI's "Add a provider" form. Not kept with the UI state, like `server_form`.
+    pub provider_form: ProviderForm,
+    /// The providers "Add a provider" offers: a fixed table, read once.
+    pub offers: Vec<craft_anything_ai::ProviderOffer>,
+    /// The saved AI whose key is being changed, if any.
+    pub key_change: Option<KeyChange>,
     /// Every project's rebuild in this window: working, waiting their turn, or finished.
     pub runs: craft_anything_ai::rebuild::RunSet,
     /// What was typed for each note still waiting for a builder, by note id, to put back in the
@@ -576,6 +614,9 @@ impl CraftApp {
             log: Vec::new(),
             key_inputs: Default::default(),
             server_form: ServerForm::default(),
+            provider_form: ProviderForm::default(),
+            offers: craft_anything_ai::offers::offers(),
+            key_change: None,
             runs: craft_anything_ai::rebuild::RunSet::new(craft_anything_engine::settings::BuildSettings::default().parallel),
             drafts: Default::default(),
             pending_paste: None,
@@ -1567,6 +1608,9 @@ impl CraftApp {
                     if self.server_form.name.trim() == name {
                         self.server_form = ServerForm::default();
                     }
+                    if self.provider_form.adding.as_deref() == Some(name.as_str()) {
+                        self.provider_form = ProviderForm::default();
+                    }
                     self.toast(i18n::trf("{name} is ready", &[("name", &name)]), false);
                     // Picking another AI (or none) while this one connected wins.
                     if choices == self.backend_choices {
@@ -1574,8 +1618,33 @@ impl CraftApp {
                     }
                     self.refresh_backends();
                 }
-                Err(e) => self.toast(e.for_people(), true),
+                Err(e) => {
+                    // Shown under the form too: the toast can sit behind the Settings window.
+                    if self.provider_form.adding.as_deref() == Some(name.as_str()) {
+                        self.provider_form.adding = None;
+                        self.provider_form.error = Some(e.for_people());
+                    }
+                    self.toast(e.for_people(), true)
+                }
             },
+            Done::KeyChanged { name, result } => {
+                let editing = self.key_change.as_ref().is_some_and(|k| k.name == name);
+                match result {
+                    Ok(()) => {
+                        if editing {
+                            self.key_change = None;
+                        }
+                        self.toast(i18n::trf("New key saved for {name}", &[("name", &name)]), false);
+                    }
+                    Err(e) => {
+                        if let Some(k) = self.key_change.as_mut().filter(|_| editing) {
+                            k.saving = false;
+                            k.error = Some(e.for_people());
+                        }
+                        self.toast(e.for_people(), true)
+                    }
+                }
+            }
             Done::Picked { pick, path } => {
                 if let Some(path) = path {
                     match pick {

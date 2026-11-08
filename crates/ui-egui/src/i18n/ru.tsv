@@ -1289,7 +1289,7 @@ Write the brief	Написать краткое описание
 Write the handoff	Написать передачу
 Wrote {what} to {}	Записано {what} в {}
 You answered: {a}	Вы ответили: {a}
-You can add a Claude, ChatGPT or OpenRouter key, a local model (Ollama, LM Studio) or an agent you already use, later in Settings → AI.	Вы можете добавить ключ Claude, ChatGPT или OpenRouter, локальную модель (Ollama, LM Studio) или агент, который уже используете, позже в Настройки → ИИ.
+Add a Claude, ChatGPT or OpenRouter key under Add a provider below, a local model by its address, or an agent you already use. Settings → AI has the same.	Ниже, в разделе «Добавить провайдера», можно добавить ключ Claude, ChatGPT или OpenRouter, локальную модель по адресу или агент, который вы уже используете. То же есть в Настройки → ИИ.
 You chose:	Вы выбрали:
 You're all set	Всё готово
 Your app is ready	Ваше приложение готово
@@ -1468,3 +1468,17 @@ Find AI on this computer	Найти ИИ на этом компьютере
 Add an AI	Добавить ИИ
 Change an AI's key	Изменить ключ ИИ
 Test an AI	Проверить ИИ
+Change key	Сменить ключ
+Save key	Сохранить ключ
+New key saved for {name}	Новый ключ для {name} сохранён
+Change {name}'s key	Сменить ключ {name}
+Pay per use	Оплата за использование
+Free key	Бесплатный ключ
+Monthly plan	Ежемесячный план
+On your computer	На вашем компьютере
+Billing unknown	Оплата неизвестна
+Add a provider	Добавить провайдера
+An AI service you have a key for. The key is checked with the provider before it's saved.	Сервис ИИ, для которого у вас есть ключ. Ключ проверяется у провайдера перед сохранением.
+Choose a provider	Выберите провайдера
+Provider	Провайдер
+Get a key	Получить ключ

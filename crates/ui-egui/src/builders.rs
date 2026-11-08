@@ -310,6 +310,43 @@ impl CraftApp {
         });
     }
 
+    /// Add the AI in Settings → AI's "Add a provider" form. The provider is asked for its models
+    /// with the key first (at most 10 s), so a rejected key saves nothing; the key goes to the
+    /// keychain and the form keeps what was typed until it's added.
+    pub fn add_provider(&mut self) {
+        let f = &mut self.provider_form;
+        let Some(offer) = self.offers.iter().find(|o| o.id == f.offer) else { return };
+        let name = Some(f.name.trim()).filter(|n| !n.is_empty()).unwrap_or(&offer.default_name).to_string();
+        let (offer, key, model, base_url) =
+            (offer.id.clone(), Some(f.key.trim().to_string()).filter(|k| !k.is_empty()), f.model.trim().to_string(), f.base_url.clone());
+        f.adding = Some(name.clone());
+        f.error = None;
+        let hub = self.hub.clone();
+        let choices = self.backend_choices;
+        self.jobs.spawn(trf("Connect {name}", &[("name", &name)]), true, move |_| {
+            let model = Some(model.as_str()).filter(|m| !m.is_empty());
+            let result = hub.add_provider(&offer, Some(&name), key, model, base_url.as_deref(), true, false).map(|_| ());
+            Ok(crate::Done::BackendAdded { name, result, choices })
+        });
+    }
+
+    /// Save the key typed under a saved AI's "Change key". Its provider must accept the new key
+    /// first; a refused key keeps the old one.
+    pub fn change_key(&mut self) {
+        let Some(k) = self.key_change.as_mut() else { return };
+        let (name, key) = (k.name.clone(), k.key.trim().to_string());
+        if key.is_empty() {
+            return;
+        }
+        k.saving = true;
+        k.error = None;
+        let hub = self.hub.clone();
+        self.jobs.spawn(trf("Change {name}'s key", &[("name", &name)]), true, move |_| {
+            let result = hub.set_backend_key(&name, &key, true).map(|_| ());
+            Ok(crate::Done::KeyChanged { name, result })
+        });
+    }
+
     /// Run an agent app from this program (`None`: find it by its usual name again).
     pub fn set_agent_program(&mut self, name: &str, program: Option<String>) {
         self.agent_model_picker = None;

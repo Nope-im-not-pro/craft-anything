@@ -1289,7 +1289,7 @@ Write the brief	Viết bản tóm tắt
 Write the handoff	Viết bản bàn giao
 Wrote {what} to {}	Đã ghi {what} vào {}
 You answered: {a}	Bạn đã trả lời: {a}
-You can add a Claude, ChatGPT or OpenRouter key, a local model (Ollama, LM Studio) or an agent you already use, later in Settings → AI.	Bạn có thể thêm khóa Claude, ChatGPT hoặc OpenRouter, một mô hình chạy trên máy (Ollama, LM Studio) hoặc một tác tử bạn đã dùng, sau này trong Cài đặt → AI.
+Add a Claude, ChatGPT or OpenRouter key under Add a provider below, a local model by its address, or an agent you already use. Settings → AI has the same.	Thêm khóa Claude, ChatGPT hoặc OpenRouter ở mục Thêm nhà cung cấp bên dưới, một mô hình chạy trên máy theo địa chỉ, hoặc một tác tử bạn đã dùng. Cài đặt → AI cũng có các mục này.
 You chose:	Bạn đã chọn:
 You're all set	Mọi thứ đã sẵn sàng
 Your app is ready	Ứng dụng của bạn đã sẵn sàng
@@ -1468,3 +1468,17 @@ Find AI on this computer	Tìm AI trên máy tính này
 Add an AI	Thêm một AI
 Change an AI's key	Đổi khóa của một AI
 Test an AI	Kiểm tra một AI
+Change key	Đổi khóa
+Save key	Lưu khóa
+New key saved for {name}	Đã lưu khóa mới cho {name}
+Change {name}'s key	Đổi khóa của {name}
+Pay per use	Trả theo mức dùng
+Free key	Khóa miễn phí
+Monthly plan	Gói hằng tháng
+On your computer	Trên máy của bạn
+Billing unknown	Chưa rõ cách tính phí
+Add a provider	Thêm nhà cung cấp
+An AI service you have a key for. The key is checked with the provider before it's saved.	Một dịch vụ AI bạn có khóa. Khóa được kiểm tra với nhà cung cấp trước khi lưu.
+Choose a provider	Chọn nhà cung cấp
+Provider	Nhà cung cấp
+Get a key	Lấy khóa

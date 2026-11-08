@@ -1291,7 +1291,7 @@ Write the brief	Scrivi il brief
 Write the handoff	Scrivi il passaggio di consegne
 Wrote {what} to {}	Scritto {what} in {}
 You answered: {a}	Hai risposto: {a}
-You can add a Claude, ChatGPT or OpenRouter key, a local model (Ollama, LM Studio) or an agent you already use, later in Settings → AI.	Puoi aggiungere dopo, in Impostazioni → IA, una chiave Claude, ChatGPT o OpenRouter, un modello locale (Ollama, LM Studio) o un agente che usi già.
+Add a Claude, ChatGPT or OpenRouter key under Add a provider below, a local model by its address, or an agent you already use. Settings → AI has the same.	Aggiungi qui sotto, in Aggiungi un fornitore, una chiave Claude, ChatGPT o OpenRouter, un modello locale dal suo indirizzo o un agente che usi già. Impostazioni → IA offre lo stesso.
 You chose:	Hai scelto:
 You're all set	Sei a posto
 Your app is ready	La tua app è pronta
@@ -1470,3 +1470,17 @@ Find AI on this computer	Trova IA su questo computer
 Add an AI	Aggiungi un'IA
 Change an AI's key	Cambia la chiave di un'IA
 Test an AI	Prova un'IA
+Change key	Cambia chiave
+Save key	Salva chiave
+New key saved for {name}	Nuova chiave salvata per {name}
+Change {name}'s key	Cambia la chiave di {name}
+Pay per use	A consumo
+Free key	Chiave gratuita
+Monthly plan	Piano mensile
+On your computer	Sul tuo computer
+Billing unknown	Fatturazione sconosciuta
+Add a provider	Aggiungi un fornitore
+An AI service you have a key for. The key is checked with the provider before it's saved.	Un servizio di IA per cui hai una chiave. La chiave viene verificata con il fornitore prima di essere salvata.
+Choose a provider	Scegli un fornitore
+Provider	Fornitore
+Get a key	Ottieni una chiave

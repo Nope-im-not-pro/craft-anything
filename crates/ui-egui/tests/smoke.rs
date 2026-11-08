@@ -1369,6 +1369,9 @@ fn an_ai_server_is_added_by_its_address() {
     h.get_by_label("Add an AI by its address");
     h.state_mut().server_form = craft_anything_ui_egui::ServerForm { name: "Studio box".into(), address: url.clone(), ..Default::default() };
     h.run_steps(1);
+    // "Add a provider" sits above it, so it may be below the fold.
+    h.get_by_label("Server address").scroll_to_me();
+    h.run_steps(6);
     h.get_by_label("Add").click();
     assert!(wait(&mut h, |a| a.backends.iter().any(|b| b.name == "Studio box" && b.model == "qwen3:8b")), "added with a model that can chat");
     assert!(h.state().server_form.name.is_empty(), "the form empties once it's added");
@@ -3117,4 +3120,139 @@ fn a_very_long_app_file_name_keeps_start_inside_the_window() {
     let content = h.ctx.content_rect();
     let start = h.get_by_label("Start").rect();
     assert!(start.left() >= 0.0 && start.right() <= content.right(), "Start ({start:?}) stays inside the window ({content:?})");
+}
+
+/// A stand-in provider that answers every request with `status` and `body`, once it has read the
+/// whole request header (a short read could leave bytes behind and reset the connection). Its
+/// address, without `/v1`, as the Claude API's base address is given.
+fn provider_server(status: u16, body: &'static str) -> String {
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    std::thread::spawn(move || {
+        use std::io::{Read, Write};
+        for mut s in listener.incoming().flatten() {
+            let _ = s.set_read_timeout(Some(Duration::from_secs(5)));
+            let (mut seen, mut buf) = (Vec::new(), [0u8; 1024]);
+            while !seen.windows(4).any(|w| w == b"\r\n\r\n") && seen.len() < 65536 {
+                match s.read(&mut buf) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => seen.extend_from_slice(&buf[..n]),
+                }
+            }
+            let reason = if status == 200 { "OK" } else { "Unauthorized" };
+            let _ =
+                write!(s, "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+        }
+    });
+    url
+}
+
+const CLAUDE_MODELS: &str = r#"{"data":[{"id":"claude-opus-5-5","type":"model"},{"id":"claude-haiku-5-5","type":"model"}],"has_more":false}"#;
+const REJECTED: &str = r#"{"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}"#;
+
+fn settings_ai() -> Harness<'static, CraftApp> {
+    harness(|| {
+        let mut a = demo::app(demo::engine(Mode::Experienced, true));
+        a.state.settings_open = true;
+        a.state.settings_tab = craft_anything_ui_egui::state::SettingsTab::Ai;
+        a
+    })
+}
+
+/// R5.8: a person with a Claude key picks the Claude API in Settings → AI, without an environment
+/// variable; the key is checked with the provider (a stand-in here) before the AI is saved.
+#[test]
+fn settings_adds_a_claude_key_from_the_provider_list() {
+    let url = provider_server(200, CLAUDE_MODELS);
+    let mut h = settings_ai();
+    h.run_steps(3);
+    h.get_by_label("Add a provider");
+    let passwords = h.query_all_by_role(egui::accesskit::Role::PasswordInput).count();
+    h.get_by_label("Provider").click();
+    h.run_steps(2);
+    h.get_by_label("Anthropic (Claude API)").click();
+    h.run_steps(3);
+    assert_eq!(h.state().provider_form.offer, "anthropic");
+    assert_eq!(h.state().provider_form.name, "Claude", "the name follows the provider");
+    h.get_by_label("Pay per use");
+    h.get_by_label("Get a key");
+    assert_eq!(h.query_all_by_role(egui::accesskit::Role::PasswordInput).count(), passwords + 1, "the key field hides what's typed");
+    // The section holds still once it's open (no size measured a frame late).
+    let at = h.get_by_label("Add a provider").rect();
+    h.run_steps(4);
+    assert_eq!(h.get_by_label("Add a provider").rect(), at);
+    h.state_mut().provider_form.key = "sk-test".into();
+    h.state_mut().provider_form.base_url = Some(url.clone());
+    h.state_mut().add_provider();
+    assert!(wait(&mut h, |a| a.provider_form.adding.is_none() && a.backends.iter().any(|b| b.name == "Claude" && b.base_url.as_deref() == Some(url.as_str()))));
+    assert_eq!(h.state().provider_form.offer, "", "the form is empty again once the AI is added");
+    assert!(h.state().hub.has_key("Claude"));
+    assert!(h.state().hub.config().get("Claude").is_some());
+}
+
+/// A key the provider refuses adds nothing, and the reason is shown in the form, where the person
+/// is looking, not only in a message behind the Settings window.
+#[test]
+fn a_refused_provider_key_adds_nothing_and_says_why() {
+    let url = provider_server(401, REJECTED);
+    let mut h = settings_ai();
+    h.run_steps(3);
+    let form = &mut h.state_mut().provider_form;
+    form.offer = "anthropic".into();
+    form.name = "Claude test".into();
+    form.key = "sk-test-refused".into();
+    form.base_url = Some(url);
+    h.state_mut().add_provider();
+    assert!(wait(&mut h, |a| a.provider_form.error.is_some()));
+    h.run_steps(3);
+    let error = h.state().provider_form.error.clone().unwrap();
+    assert!(!error.contains("sk-test-refused"), "{error}");
+    // In the form and in the message.
+    assert!(h.query_all_by_label(&error).count() >= 1);
+    assert!(h.state().hub.config().get("Claude test").is_none());
+    assert!(!h.state().hub.has_key("Claude test"));
+    assert_eq!(h.state().provider_form.key, "sk-test-refused", "what was typed stays, so it can be fixed");
+}
+
+/// The first run's AI step offers the same section, as its promise text says.
+#[test]
+fn first_run_ai_step_offers_providers() {
+    let mut h = harness(|| demo::app(demo::engine(Mode::Beginner, false)));
+    h.run_steps(3);
+    h.get_by_label("I'm new to this").click();
+    h.run_steps(3);
+    assert_eq!(h.state().state.first_run, FirstRunStep::Brain);
+    h.get_by_label("Add a provider");
+    h.get_by_label("Provider");
+}
+
+/// "Change key" on a saved API backend: the new key is checked with its provider first; a refused
+/// one keeps the old key and says why.
+#[test]
+fn a_saved_ais_key_is_changed_after_its_provider_accepts_it() {
+    let good = provider_server(200, CLAUDE_MODELS);
+    let refused = provider_server(401, REJECTED);
+    let mut h = settings_ai();
+    let hub = h.state().hub.clone();
+    hub.add_provider("anthropic", Some("Claude good"), Some("sk-test-old".into()), None, Some(&good), false, false).unwrap();
+    hub.add_provider("anthropic", Some("Claude refused"), Some("sk-test-old".into()), None, Some(&refused), false, false).unwrap();
+    h.state_mut().refresh_backends();
+    assert!(wait(&mut h, |a| a.backends.iter().filter(|b| b.name.starts_with("Claude ")).count() == 2));
+    h.run_steps(2);
+    for (name, accepted) in [("Claude good", true), ("Claude refused", false)] {
+        h.state_mut().key_change = Some(craft_anything_ui_egui::KeyChange { name: name.into(), key: "sk-test-new".into(), ..Default::default() });
+        h.run_steps(2);
+        h.get_by_label("Save key").click();
+        h.run_steps(1);
+        assert!(wait(&mut h, |a| a.key_change.as_ref().is_none_or(|k| !k.saving)));
+        h.run_steps(2);
+        if accepted {
+            assert!(h.state().key_change.is_none(), "the field closes once the key is saved");
+        } else {
+            let error = h.state().key_change.as_ref().and_then(|k| k.error.clone()).expect("a refused key says why");
+            assert!(!error.contains("sk-test-new"), "{error}");
+            assert!(h.query_all_by_label(&error).count() >= 1);
+        }
+    }
+    assert!(h.state().hub.has_key("Claude good") && h.state().hub.has_key("Claude refused"));
 }

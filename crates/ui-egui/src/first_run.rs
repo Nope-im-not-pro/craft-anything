@@ -149,13 +149,15 @@ fn brain(app: &mut CraftApp, ui: &mut Ui, width: f32) {
                     icons::show(ui, "radar", 22.0, t.text_faint);
                     ui.vertical(|ui| {
                         ui.label(RichText::new(tr("We didn't find an AI on this computer yet")).font(theme::medium(theme::BODY)));
-                        ui.label(RichText::new(tr("You can add a Claude, ChatGPT or OpenRouter key, a local model (Ollama, LM Studio) or an agent you already use, later in Settings → AI.")).color(t.text_dim));
+                        ui.label(RichText::new(tr("Add a Claude, ChatGPT or OpenRouter key under Add a provider below, a local model by its address, or an agent you already use. Settings → AI has the same.")).color(t.text_dim));
                     });
                 });
             });
             ui.add_space(8.0);
         }
-        // A model server on another computer can't be found by looking here (#54, #98).
+        // A provider with a key, and a model server on another computer, can't be found by
+        // looking here (#54, #98).
+        crate::settings_ui::provider_form(app, ui);
         crate::settings_ui::server_form(app, ui);
         ui.add_space(8.0);
         // "No AI for now"

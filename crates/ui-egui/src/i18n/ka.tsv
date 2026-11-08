@@ -1309,7 +1309,7 @@ Write the brief	მოკლე აღწერის დაწერა
 Write the handoff	გადაცემის ჩანაწერის დაწერა
 Wrote {what} to {}	{what} ჩაიწერა აქ: {}
 You answered: {a}	თქვენ უპასუხეთ: {a}
-You can add a Claude, ChatGPT or OpenRouter key, a local model (Ollama, LM Studio) or an agent you already use, later in Settings → AI.	Claude-ის, ChatGPT-ის ან OpenRouter-ის გასაღების, ლოკალური მოდელის (Ollama, LM Studio) ან უკვე გამოყენებული აგენტის დამატება მოგვიანებით შეგიძლიათ აქ: პარამეტრები → AI.
+Add a Claude, ChatGPT or OpenRouter key under Add a provider below, a local model by its address, or an agent you already use. Settings → AI has the same.	ქვემოთ, „მომწოდებლის დამატებაში“, დაამატეთ Claude-ის, ChatGPT-ის ან OpenRouter-ის გასაღები, ლოკალური მოდელი მისამართით ან უკვე გამოყენებული აგენტი. იგივე შესაძლებელია აქ: პარამეტრები → AI.
 You chose:	თქვენ აირჩიეთ:
 You're all set	ყველაფერი მზადაა
 Your app is ready	თქვენი აპი მზადაა
@@ -1468,3 +1468,17 @@ Find AI on this computer	AI-ის პოვნა ამ კომპიუტ�
 Add an AI	AI-ის დამატება
 Change an AI's key	AI-ის გასაღების შეცვლა
 Test an AI	AI-ის შემოწმება
+Change key	გასაღების შეცვლა
+Save key	გასაღების შენახვა
+New key saved for {name}	{name}-ის ახალი გასაღები შენახულია
+Change {name}'s key	{name}-ის გასაღების შეცვლა
+Pay per use	გადახდა გამოყენებისამებრ
+Free key	უფასო გასაღები
+Monthly plan	ყოველთვიური გეგმა
+On your computer	თქვენს კომპიუტერზე
+Billing unknown	გადახდის წესი უცნობია
+Add a provider	მომწოდებლის დამატება
+An AI service you have a key for. The key is checked with the provider before it's saved.	AI სერვისი, რომლის გასაღებიც გაქვთ. გასაღები შენახვამდე მოწმდება მომწოდებელთან.
+Choose a provider	აირჩიეთ მომწოდებელი
+Provider	მომწოდებელი
+Get a key	გასაღების მიღება

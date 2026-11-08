@@ -334,6 +334,8 @@ fn ai(app: &mut CraftApp, ui: &mut Ui) {
     let mut save_folder = None;
     // Taken out while the rows borrow the app, and put back after them.
     let mut folder_drafts = std::mem::take(&mut app.folder_inputs);
+    let mut key_change = app.key_change.take();
+    let (mut change_key_for, mut save_key) = (None, false);
     let (mut pick_model, mut chosen_model, mut close_picker) = (None, None, false);
     let mut chosen_effort = None;
     let (mut pick_agent_model, mut chosen_agent_model, mut remote_program) = (None, None, None);
@@ -581,6 +583,15 @@ fn ai(app: &mut CraftApp, ui: &mut Ui) {
                         extracts = Some(Some(b.name.clone()));
                     }
                 }
+                // A new key for an API backend, checked with its provider before it's saved.
+                let local_api = b.ssh_host.as_deref().is_none_or(|h| h.trim().is_empty());
+                if b.kind != BackendKind::AgentCli
+                    && local_api
+                    && key_change.as_ref().is_none_or(|k| k.name != b.name)
+                    && widgets::secondary(ui, None, "Change key").clicked()
+                {
+                    change_key_for = Some(b.name.clone());
+                }
                 // Off: kept with its key, but nothing uses it.
                 let (label, tip) = if b.enabled {
                     ("Turn off", "Nothing uses it until it's on again; it keeps its key.")
@@ -601,6 +612,34 @@ fn ai(app: &mut CraftApp, ui: &mut Ui) {
                     ui.data_mut(|d| d.insert_temp(confirm_id, b.name.clone()));
                 }
             });
+            if let Some(k) = key_change.as_mut().filter(|k| k.name == b.name) {
+                let mut cancel = false;
+                ui.horizontal_wrapped(|ui| {
+                    ui.add_space(26.0);
+                    let field = egui::TextEdit::singleline(&mut k.key)
+                        .password(true)
+                        .hint_text(tr("API key (stored in your system keychain)"))
+                        .desired_width(260.0)
+                        .frame(widgets::text_field_frame_compact(&t));
+                    widgets::named(ui.add_enabled(!k.saving, field), "API key");
+                    let ready = !k.saving && !k.key.trim().is_empty();
+                    if widgets::primary_icon(ui, None, "Save key", ready).clicked() && ready {
+                        save_key = true;
+                    }
+                    if k.saving {
+                        ui.add(crate::widgets::Spinner::new().color(t.accent));
+                    } else if widgets::link(ui, "Cancel").clicked() {
+                        cancel = true;
+                    }
+                });
+                if let Some(error) = &k.error {
+                    ui.add(egui::Label::new(RichText::new(error).color(t.danger)).wrap());
+                }
+                if cancel {
+                    change_key_for = None;
+                    key_change = None;
+                }
+            }
             if !b.enabled {
                 ui.label(RichText::new(tr("Off")).color(t.text_faint).size(theme::CAPTION));
             }
@@ -618,6 +657,14 @@ fn ai(app: &mut CraftApp, ui: &mut Ui) {
         app.set_agent_program(&name, None);
     }
     app.folder_inputs = folder_drafts;
+    // A key being saved stays open until its answer comes back.
+    if let Some(name) = change_key_for.filter(|_| key_change.as_ref().is_none_or(|k| !k.saving)) {
+        key_change = Some(crate::KeyChange { name, ..Default::default() });
+    }
+    app.key_change = key_change;
+    if save_key {
+        app.change_key();
+    }
     if let Some((name, folder)) = save_folder {
         app.set_agent_folder(&name, Some(folder));
     }
@@ -741,7 +788,110 @@ fn ai(app: &mut CraftApp, ui: &mut Ui) {
         });
         ui.add_space(6.0);
     }
+    provider_form(app, ui);
     server_form(app, ui);
+}
+
+/// What a provider's billing pill says.
+fn billing_pill(ui: &mut Ui, billing: craft_anything_ai::Billing) {
+    use craft_anything_ai::Billing;
+    let t = Tokens::get(ui.ctx());
+    match billing {
+        Billing::PayPerUse => widgets::pill(ui, "Pay per use", t.text_dim, t.raised),
+        Billing::FreeKey => widgets::pill(ui, "Free key", t.success, t.raised),
+        Billing::Subscription => widgets::pill(ui, "Monthly plan", t.text_dim, t.raised),
+        Billing::OnYourComputer => widgets::pill(ui, "On your computer", t.success, t.raised),
+        Billing::Unknown => widgets::pill(ui, "Billing unknown", t.text_faint, t.raised),
+    };
+}
+
+/// An AI from a provider, added with its key: the Claude API, OpenAI, OpenRouter, Groq… (R5.8).
+/// The provider is asked for its models with the key before anything is saved. The first run's
+/// AI step shows it too.
+pub(crate) fn provider_form(app: &mut CraftApp, ui: &mut Ui) {
+    let t = Tokens::get(ui.ctx());
+    ui.add_space(14.0);
+    widgets::caption(ui, "Add a provider");
+    ui.label(
+        RichText::new(tr("An AI service you have a key for. The key is checked with the provider before it's saved.")).color(t.text_faint).size(theme::CAPTION),
+    );
+    ui.add_space(4.0);
+    // Taken out while the offers are borrowed, and put back after them.
+    let mut form = std::mem::take(&mut app.provider_form);
+    let offers = &app.offers;
+    let chosen = offers.iter().find(|o| o.id == form.offer);
+    let busy = form.adding.is_some();
+    let mut add = false;
+    ui.horizontal_wrapped(|ui| {
+        let label = chosen.map_or_else(|| tr("Choose a provider"), |o| o.name.clone());
+        let before = form.offer.clone();
+        let combo = egui::ComboBox::from_id_salt("provider-offer").icon(widgets::combo_icon).width(240.0).selected_text(label).show_ui(ui, |ui| {
+            for o in offers {
+                ui.selectable_value(&mut form.offer, o.id.clone(), &o.name);
+            }
+        });
+        widgets::named(combo.response, "Provider");
+        if form.offer != before {
+            // The name follows the provider until the person types their own.
+            let old_default = offers.iter().find(|o| o.id == before).map(|o| o.default_name.as_str());
+            if form.name.trim().is_empty() || Some(form.name.trim()) == old_default {
+                form.name = offers.iter().find(|o| o.id == form.offer).map(|o| o.default_name.clone()).unwrap_or_default();
+            }
+            form.model.clear();
+            form.error = None;
+        }
+        if let Some(o) = offers.iter().find(|o| o.id == form.offer) {
+            billing_pill(ui, o.billing);
+            if let Some(url) = o.key_url.as_deref()
+                && widgets::link(ui, "Get a key").on_hover_text(url).clicked()
+            {
+                ui.ctx().open_url(egui::OpenUrl::new_tab(url));
+            }
+        }
+    });
+    if let Some(o) = offers.iter().find(|o| o.id == form.offer) {
+        if let Some(note) = &o.note {
+            ui.label(RichText::new(note).color(t.text_faint).size(theme::CAPTION));
+        }
+        const FRAME: f32 = 18.0;
+        ui.horizontal(|ui| {
+            let r = ui.add_enabled(
+                !busy,
+                egui::TextEdit::singleline(&mut form.name).hint_text(o.default_name.as_str()).desired_width(150.0).frame(widgets::text_field_frame_compact(&t)),
+            );
+            widgets::named(r, "AI name");
+            let model = if form.model.is_empty() { trf("Model: {model}", &[("model", &o.default_model)]) } else { form.model.clone() };
+            let combo = egui::ComboBox::from_id_salt("provider-model").icon(widgets::combo_icon).selected_text(model).show_ui(ui, |ui| {
+                ui.selectable_value(&mut form.model, String::new(), tr("Default"));
+                for m in &o.suggested_models {
+                    ui.selectable_value(&mut form.model, m.clone(), m);
+                }
+            });
+            widgets::named(combo.response, "Model");
+        });
+        ui.horizontal(|ui| {
+            let w = (ui.available_width() - FRAME - 90.0).max(120.0);
+            let hint = if o.needs_key { tr("API key (stored in your system keychain)") } else { tr("API key, if it needs one") };
+            let r = ui.add_enabled(
+                !busy,
+                egui::TextEdit::singleline(&mut form.key).password(true).hint_text(hint).desired_width(w).frame(widgets::text_field_frame_compact(&t)),
+            );
+            widgets::named(r, "API key");
+            let ready = !busy && (!o.needs_key || !form.key.trim().is_empty());
+            if busy {
+                ui.add(crate::widgets::Spinner::new().color(t.accent));
+            } else {
+                add = widgets::primary_icon(ui, Some("plus"), "Add", ready).clicked() && ready;
+            }
+        });
+    }
+    if let Some(error) = &form.error {
+        ui.add(egui::Label::new(RichText::new(error).color(t.danger)).wrap());
+    }
+    app.provider_form = form;
+    if add {
+        app.add_provider();
+    }
 }
 
 /// An AI that "Look for AI" can't find: a server on another computer or a hosted service, added by

@@ -598,9 +598,10 @@ behind a gateway, nothing in the UI; Gemini and Kimi stay in Detect's list; no n
       the saved settings file has it
 - [ ] The headless-parity rows for adding, keying and removing an AI name the new tools
       (`ai_backend_add`, `ai_backend_key_set`, `ai_backend_remove`) instead of only CLI commands
-- [ ] "Add a provider" in Settings → AI and the first run, and "Change key" on a saved API backend;
+- [x] "Add a provider" in Settings → AI and the first run, and "Change key" on a saved API backend;
       the first run's promise text matches
-      — claimed: Nope-im-not-pro, branch feature/r5.8-provider-picker-ui
+      — claimed: Nope-im-not-pro, branch feature/r5.8-provider-picker-ui. UI-tested with a
+      stand-in provider; not run live with a real key
 - [x] Claude client: fallback beta header only for api.anthropic.com, model info from `/v1/models`
       (paged, bounded), effort and thinking only where the model has them,
       `model_context_window_exceeded` refits like a context error, a spend-limit 429 is billing,
@@ -616,6 +617,13 @@ behind a gateway, nothing in the UI; Gemini and Kimi stay in Detect's list; no n
 - [ ] Settings → AI shows a backend's locality and lets a person change it (only CLI
       `ai locality <name> [gateway|local_model|hosted|default]` so far), and the meter says why a
       gateway's cost is unknown ("cost unknown (through 9router)")
+- [ ] A `locality` override is taken whatever the backend's kind (`locality::of_entry`): an agent
+      app or a hosted API set to a gateway or a local model gets that budget and a $0 meter. Refuse
+      or ignore an override that doesn't fit the kind
+- [ ] The rebuild polls (`rebuild/runs.rs`, `rebuild/tools.rs`) build their hubs with
+      `KeyStore::system()`, so a portable install's or a test's key file isn't the one they read
+- [ ] A context-window stop refits once, but a conversation with nothing left to trim or
+      summarise can't get smaller, so the second request fails the same way
 - [ ] 9router: found at 127.0.0.1:20128 with or without its key (a 401 asks for one; one that
       answers without a key gets a security hint), its models with tool and combo flags, its errors
       with a dashboard link; any local server that answers 401 is offered with a key field

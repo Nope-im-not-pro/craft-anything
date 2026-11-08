@@ -1289,7 +1289,7 @@ Write the brief	撰写需求简报
 Write the handoff	撰写交接说明
 Wrote {what} to {}	已将{what}写入 {}
 You answered: {a}	你的回答：{a}
-You can add a Claude, ChatGPT or OpenRouter key, a local model (Ollama, LM Studio) or an agent you already use, later in Settings → AI.	之后可以在“设置 → AI”中添加 Claude、ChatGPT 或 OpenRouter 密钥、本地模型 (Ollama、LM Studio)，或你正在使用的智能体。
+Add a Claude, ChatGPT or OpenRouter key under Add a provider below, a local model by its address, or an agent you already use. Settings → AI has the same.	在下方“添加提供商”中添加 Claude、ChatGPT 或 OpenRouter 密钥，按地址添加本地模型，或添加你正在使用的智能体。“设置 → AI”中也可以这样做。
 You chose:	你的选择：
 You're all set	准备就绪
 Your app is ready	你的应用已就绪
@@ -1468,3 +1468,17 @@ Find AI on this computer	在这台电脑上查找 AI
 Add an AI	添加 AI
 Change an AI's key	更改 AI 的密钥
 Test an AI	测试 AI
+Change key	更改密钥
+Save key	保存密钥
+New key saved for {name}	已为 {name} 保存新密钥
+Change {name}'s key	更改 {name} 的密钥
+Pay per use	按用量付费
+Free key	免费密钥
+Monthly plan	月度套餐
+On your computer	在你的电脑上
+Billing unknown	计费方式未知
+Add a provider	添加提供商
+An AI service you have a key for. The key is checked with the provider before it's saved.	你有密钥的 AI 服务。保存前会先向提供商验证密钥。
+Choose a provider	选择提供商
+Provider	提供商
+Get a key	获取密钥

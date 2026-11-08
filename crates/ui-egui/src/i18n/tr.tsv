@@ -1289,7 +1289,7 @@ Write the brief	Özeti yaz
 Write the handoff	Devir notunu yaz
 Wrote {what} to {}	{what}, {} konumuna yazıldı
 You answered: {a}	Yanıtladınız: {a}
-You can add a Claude, ChatGPT or OpenRouter key, a local model (Ollama, LM Studio) or an agent you already use, later in Settings → AI.	Daha sonra Ayarlar → AI bölümünden Claude, ChatGPT veya OpenRouter anahtarı, yerel bir model (Ollama, LM Studio) ya da kullandığınız bir ajan ekleyebilirsiniz.
+Add a Claude, ChatGPT or OpenRouter key under Add a provider below, a local model by its address, or an agent you already use. Settings → AI has the same.	Aşağıda Sağlayıcı ekle bölümünden Claude, ChatGPT veya OpenRouter anahtarı, adresiyle yerel bir model ya da kullandığınız bir ajan ekleyin. Ayarlar → AI da aynısını sunar.
 You chose:	Seçtiniz:
 You're all set	Her şey hazır
 Your app is ready	Uygulamanız hazır
@@ -1468,3 +1468,17 @@ Find AI on this computer	Bu bilgisayarda AI bul
 Add an AI	Bir AI ekle
 Change an AI's key	Bir AI'ın anahtarını değiştir
 Test an AI	Bir AI'ı test et
+Change key	Anahtarı değiştir
+Save key	Anahtarı kaydet
+New key saved for {name}	{name} için yeni anahtar kaydedildi
+Change {name}'s key	{name} anahtarını değiştir
+Pay per use	Kullanım başına ödeme
+Free key	Ücretsiz anahtar
+Monthly plan	Aylık plan
+On your computer	Bilgisayarınızda
+Billing unknown	Faturalandırma bilinmiyor
+Add a provider	Sağlayıcı ekle
+An AI service you have a key for. The key is checked with the provider before it's saved.	Anahtarınız olan bir AI hizmeti. Anahtar kaydedilmeden önce sağlayıcıyla doğrulanır.
+Choose a provider	Bir sağlayıcı seçin
+Provider	Sağlayıcı
+Get a key	Anahtar al
