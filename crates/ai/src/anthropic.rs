@@ -623,11 +623,13 @@ mod tests {
     }
 
     /// A stand-in `/v1/models` server: each request gets `answer(n)` for its number `n`, up to
-    /// `max` requests; the paths asked for are kept.
+    /// `max` requests; the paths asked for are kept. Callers hold [`model_info::test_lock`]: an
+    /// earlier test's list remembered under the same port is forgotten here.
     fn pages(max: usize, answer: impl Fn(usize) -> String + Send + 'static) -> (String, std::sync::Arc<craft_anything_platform::sync::Mutex<Vec<String>>>) {
         use std::io::{BufRead, BufReader, Write};
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
+        model_info::forget(&url);
         let paths = std::sync::Arc::new(craft_anything_platform::sync::Mutex::new(Vec::new()));
         let seen = paths.clone();
         std::thread::spawn(move || {
@@ -653,6 +655,7 @@ mod tests {
 
     #[test]
     fn the_model_list_is_read_page_by_page() {
+        let _memory = model_info::test_lock();
         let (url, paths) = pages(2, |n| match n {
             0 => json!({"data": [{"id": "a", "max_input_tokens": 1000}, {"id": "b"}], "has_more": true, "last_id": "b"}).to_string(),
             _ => json!({"data": [{"id": "c"}, {"id": "a"}], "has_more": false, "last_id": "c"}).to_string(),
@@ -667,6 +670,7 @@ mod tests {
 
     #[test]
     fn a_list_that_never_ends_stops_after_five_pages() {
+        let _memory = model_info::test_lock();
         let (url, paths) = pages(20, |n| json!({"data": [{"id": format!("m{n}")}], "has_more": true, "last_id": format!("m{n}")}).to_string());
         let models = Anthropic::new(Some(&url), "sk-test".into(), "").list_models(Duration::from_secs(10)).unwrap();
         assert_eq!(models, ["m0", "m1", "m2", "m3", "m4"]);
@@ -679,16 +683,19 @@ mod tests {
 
     #[test]
     fn an_oversized_model_list_is_refused_not_read_into_memory() {
+        let _memory = model_info::test_lock();
         let (url, _) = pages(1, |_| {
             let entries = vec![r#"{"id":"claude-model-with-a-long-name"}"#; 1_000_000].join(",");
             format!(r#"{{"data":[{entries}],"has_more":false}}"#)
         });
         let e = Anthropic::new(Some(&url), "k".into(), "").list_model_info(Duration::from_secs(20)).unwrap_err();
         assert_eq!(e.code, ErrorCode::OverLimit, "{e:?}");
+        assert!(e.remediation.as_deref().is_some_and(|r| r.contains("unusually large")), "{e:?}");
     }
 
     #[test]
     fn hostile_list_pages_never_panic() {
+        let _memory = model_info::test_lock();
         for body in ["{}", "[]", "null", r#"{"data": 5, "has_more": true}"#, r#"{"data": [null, 1, "x", {"id": null}], "has_more": "yes", "last_id": 7}"#] {
             let (url, _) = pages(1, move |_| body.to_string());
             assert_eq!(Anthropic::new(Some(&url), "k".into(), "").list_models(Duration::from_secs(10)).unwrap(), Vec::<String>::new(), "{body}");

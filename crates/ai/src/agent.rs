@@ -317,6 +317,10 @@ pub struct AgentLoop {
     /// Context windows servers said they have, by chain position: a request that didn't fit
     /// tells us the real size (#962), which may be smaller than the budget we assumed.
     server_windows: BTreeMap<usize, u64>,
+    /// Room an answer needed, by chain position: a reply cut off by the context window used its
+    /// output tokens and needed more, so at least that much more is kept free (else a refit whose
+    /// output took over a quarter of the window would resend the same request).
+    answer_room: BTreeMap<usize, u64>,
 }
 
 impl AgentLoop {
@@ -468,7 +472,7 @@ impl AgentLoop {
                 StopReason::ContextWindow => {
                     self.history.push(result.message);
                     self.record_unrun_tools(&uses);
-                    self.emit(AgentEvent::Status { text: "The answer filled the model's context window again and was cut off.".into() });
+                    self.emit(AgentEvent::Status { text: "The answer filled the model's context window and was cut off.".into() });
                     break;
                 }
                 _ => {
@@ -519,8 +523,9 @@ impl AgentLoop {
         let slot = self.chain.get(self.current);
         let configured = if self.cfg.context_tokens == 0 { slot.map(|s| s.context_tokens).unwrap_or(0) } else { self.cfg.context_tokens };
         // A window the server reported replaces our guess (a budget the person set stays the most),
-        // with a quarter of it left free for the answer.
-        let reported = self.server_windows.get(&self.current).map(|window| window - window / 4);
+        // with a quarter of it left free for the answer, or more when an answer needed more.
+        let room = self.answer_room.get(&self.current).copied().unwrap_or(0);
+        let reported = self.server_windows.get(&self.current).map(|window| window.saturating_sub((window / 4).max(room)));
         match (configured, reported) {
             (0, Some(room)) => room,
             (n, Some(room)) => n.min(room),
@@ -642,7 +647,8 @@ impl AgentLoop {
             match r {
                 // The model filled its context window while answering (#962's case, found mid-answer):
                 // its cut-off reply is dropped but paid for, room is made, and it is asked once more.
-                Ok(r) if r.stop == StopReason::ContextWindow && !refitted => {
+                // Text already shown stays, so a reply that streamed some is kept as cut off instead.
+                Ok(r) if r.stop == StopReason::ContextWindow && !refitted && !produced => {
                     refitted = true;
                     let (name, local) = (slot.name.clone(), slot.local);
                     let input = r.usage.input_tokens.saturating_add(r.usage.cache_read_tokens).saturating_add(r.usage.cache_write_tokens);
@@ -665,6 +671,8 @@ impl AgentLoop {
                     let window = input.saturating_add(r.usage.output_tokens);
                     if window > 0 {
                         self.server_windows.insert(self.current, window);
+                        // The answer needed more than the output it got: keep more than that free.
+                        self.answer_room.insert(self.current, r.usage.output_tokens.saturating_add(1));
                         self.last_input = input;
                         self.last_history_estimate = context::estimate_tokens(&self.history);
                     }
@@ -882,6 +890,7 @@ impl ApiConversation {
             failure: failure.clone(),
             failed_builds: 0,
             server_windows: BTreeMap::new(),
+            answer_room: BTreeMap::new(),
         };
         let busy2 = busy.clone();
         std::thread::Builder::new()
@@ -1437,6 +1446,7 @@ pub(crate) mod tests {
             failure: Arc::default(),
             failed_builds: 0,
             server_windows: BTreeMap::new(),
+            answer_room: BTreeMap::new(),
         };
         let tools = [ToolDef { name: "look".into(), description: "x".repeat(4000), schema: json!({"type": "object"}) }];
 
@@ -1669,52 +1679,71 @@ pub(crate) mod tests {
         }
     }
 
+    /// A reply cut off by the context window after `input` tokens in and `output` out, streaming
+    /// `text` when it isn't empty (else a cut-off tool call, which shows nothing).
+    fn cut_off(input: u64, output: u64, text: &str) -> Result<TurnResult, ToolError> {
+        let block =
+            if text.is_empty() { Block::ToolUse { id: "cut".into(), name: "look".into(), input: json!({}) } } else { Block::Text { text: text.into() } };
+        let mut r = turn(vec![block], StopReason::ContextWindow)?;
+        r.usage = Usage { input_tokens: input, output_tokens: output, ..Default::default() };
+        Ok(r)
+    }
+
+    /// What a run shows: its events, every request's messages and the journal.
+    type Run = (Vec<AgentEvent>, Vec<Vec<Msg>>, Vec<(String, Value)>);
+
+    /// Run one message on `turns` with a history whose oldest tool result (8000 characters) can
+    /// be trimmed.
+    fn run_cut_off(turns: Vec<Result<TurnResult, ToolError>>) -> Run {
+        let dir = tempfile::tempdir().unwrap();
+        let transcript = dir.path().join("transcript.json");
+        let mut history = vec![
+            Msg::user_text("Build it"),
+            Msg { role: Speaker::Assistant, blocks: vec![Block::ToolUse { id: "old".into(), name: "look".into(), input: json!({}) }] },
+            Msg { role: Speaker::User, blocks: vec![Block::ToolResult { tool_use_id: "old".into(), content: "x".repeat(8000), is_error: false }] },
+        ];
+        for _ in 0..context::KEEP_RECENT / 2 {
+            history.push(Msg { role: Speaker::Assistant, blocks: vec![Block::Text { text: "checked".into() }] });
+            history.push(Msg::user_text("continue"));
+        }
+        context::save(&transcript, &history).unwrap();
+        let host = Arc::new(FakeHost { calls: Mutex::default(), journal: Mutex::default() });
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let model = Scripted { turns: VecDeque::from(turns), seen: seen.clone() };
+        let chain = vec![ModelSlot { name: "Claude".into(), model: Box::new(model), local: false, effort: None, max_turns: 5, context_tokens: 0 }];
+        let mut conversation = ApiConversation::start(host.clone(), chain, LoopConfig { transcript: Some(transcript), ..Default::default() }).unwrap();
+        conversation.send("continue");
+        let events = drain_until_done(&mut conversation, |_, _| {});
+        let seen = seen.lock().unwrap().clone();
+        let journal = host.journal.lock().unwrap().clone();
+        (events, seen, journal)
+    }
+
+    /// The length of the oldest tool result a request carried.
+    fn old_result(h: &[Msg]) -> usize {
+        h.iter()
+            .flat_map(|m| &m.blocks)
+            .find_map(|b| match b {
+                Block::ToolResult { tool_use_id, content, .. } if tool_use_id == "old" => Some(content.len()),
+                _ => None,
+            })
+            .unwrap()
+    }
+
     /// Claude's `model_context_window_exceeded` stop: the window filled while answering. Room is made
     /// and the model asked once more, as for a request the server refused (#962); never twice.
     #[test]
     fn a_reply_that_filled_the_context_window_is_fitted_and_asked_once_more() {
-        let full = || {
-            let mut r = turn(vec![Block::Text { text: "half an ans".into() }], StopReason::ContextWindow).unwrap();
-            r.usage = Usage { input_tokens: 69_000, output_tokens: 944, ..Default::default() };
-            Ok(r)
-        };
         let answer = || turn(vec![Block::Text { text: "done".into() }], StopReason::EndTurn);
+        let full = || cut_off(69_000, 944, "");
         for (turns, fits) in [(vec![full(), answer()], true), (vec![full(), full(), answer()], false)] {
-            let dir = tempfile::tempdir().unwrap();
-            let transcript = dir.path().join("transcript.json");
-            let mut history = vec![
-                Msg::user_text("Build it"),
-                Msg { role: Speaker::Assistant, blocks: vec![Block::ToolUse { id: "old".into(), name: "look".into(), input: json!({}) }] },
-                Msg { role: Speaker::User, blocks: vec![Block::ToolResult { tool_use_id: "old".into(), content: "x".repeat(8000), is_error: false }] },
-            ];
-            for _ in 0..context::KEEP_RECENT / 2 {
-                history.push(Msg { role: Speaker::Assistant, blocks: vec![Block::Text { text: "checked".into() }] });
-                history.push(Msg::user_text("continue"));
-            }
-            context::save(&transcript, &history).unwrap();
-            let host = Arc::new(FakeHost { calls: Mutex::default(), journal: Mutex::default() });
-            let seen = Arc::new(Mutex::new(Vec::new()));
-            let model = Scripted { turns: VecDeque::from(turns), seen: seen.clone() };
-            let chain = vec![ModelSlot { name: "Claude".into(), model: Box::new(model), local: false, effort: None, max_turns: 5, context_tokens: 0 }];
-            let mut conversation = ApiConversation::start(host.clone(), chain, LoopConfig { transcript: Some(transcript), ..Default::default() }).unwrap();
-            conversation.send("continue");
-            let events = drain_until_done(&mut conversation, |_, _| {});
-            let seen = seen.lock().unwrap();
+            let (events, seen, journal) = run_cut_off(turns);
             assert_eq!(seen.len(), 2, "asked once more, never again (fits={fits})");
-            let old = |h: &[Msg]| {
-                h.iter()
-                    .flat_map(|m| &m.blocks)
-                    .find_map(|b| match b {
-                        Block::ToolResult { tool_use_id, content, .. } if tool_use_id == "old" => Some(content.len()),
-                        _ => None,
-                    })
-                    .unwrap()
-            };
-            assert_eq!(old(&seen[0]), 8000);
-            assert!(old(&seen[1]) < 8000, "room was made before asking again");
-            assert!(!seen[1].iter().any(|m| m.text().contains("half an ans")), "the cut-off reply isn't kept");
+            assert_eq!(old_result(&seen[0]), 8000);
+            assert!(old_result(&seen[1]) < 8000, "room was made before asking again");
+            let cut = |h: &[Msg]| h.iter().flat_map(|m| &m.blocks).any(|b| matches!(b, Block::ToolUse { id, .. } if id == "cut"));
+            assert!(!cut(&seen[1]), "the cut-off reply isn't kept");
             assert!(events.iter().any(|e| matches!(e, AgentEvent::Status { text } if text.contains("ran out of room"))), "{events:?}");
-            let journal = host.journal.lock().unwrap();
             assert!(journal.iter().any(|(kind, entry)| kind == "context" && entry["budget"] == 69_944 - 69_944 / 4 && entry["tokens_before"] == 69_000));
             assert!(journal.iter().any(|(kind, entry)| kind == "model_turn" && entry["stop_reason"] == "model_context_window_exceeded"));
             assert!(!events.iter().any(|e| matches!(e, AgentEvent::Error { .. })), "{events:?}");
@@ -1722,9 +1751,38 @@ pub(crate) mod tests {
                 assert!(events.iter().any(|e| matches!(e, AgentEvent::TextDelta { text } if text == "done")));
                 assert!(matches!(events.last(), Some(AgentEvent::TurnDone { input_tokens: 69_010, .. })), "the dropped reply is counted: {events:?}");
             } else {
-                assert!(events.iter().any(|e| matches!(e, AgentEvent::Status { text } if text.contains("filled the model's context window again"))));
+                assert!(
+                    events.iter().any(|e| matches!(e, AgentEvent::Status { text } if text == "The answer filled the model's context window and was cut off."))
+                );
             }
         }
+    }
+
+    /// An answer that used more than a quarter of the window (140k in, 60k out of 200k) still gets
+    /// room: the retry keeps more than its output free, so it is smaller, not the same request again.
+    #[test]
+    fn a_refit_after_a_long_answer_still_makes_room() {
+        let (events, seen, journal) = run_cut_off(vec![cut_off(140_000, 60_000, ""), turn(vec![Block::Text { text: "done".into() }], StopReason::EndTurn)]);
+        assert_eq!(seen.len(), 2);
+        assert_eq!(old_result(&seen[0]), 8000);
+        assert!(old_result(&seen[1]) < 8000, "the second request is smaller");
+        assert!(
+            journal.iter().any(|(kind, entry)| kind == "context" && entry["budget"] == 200_000 - 60_001 && entry["tokens_before"] == 140_000),
+            "{journal:?}"
+        );
+        assert!(events.iter().any(|e| matches!(e, AgentEvent::TextDelta { text } if text == "done")));
+    }
+
+    /// A reply that had already streamed text when the window filled keeps it, as a cut-off answer:
+    /// the text on screen and in the history agree, and nothing is asked again.
+    #[test]
+    fn a_cut_off_reply_that_showed_text_is_kept() {
+        let (events, seen, _) = run_cut_off(vec![cut_off(69_000, 944, "half an ans"), turn(vec![Block::Text { text: "done".into() }], StopReason::EndTurn)]);
+        assert_eq!(seen.len(), 1, "not asked again");
+        assert!(events.iter().any(|e| matches!(e, AgentEvent::TextDelta { text } if text == "half an ans")));
+        assert!(!events.iter().any(|e| matches!(e, AgentEvent::Status { text } if text.contains("ran out of room"))), "{events:?}");
+        assert!(events.iter().any(|e| matches!(e, AgentEvent::Status { text } if text == "The answer filled the model's context window and was cut off.")));
+        assert!(matches!(events.last(), Some(AgentEvent::TurnDone { .. })));
     }
 
     #[test]

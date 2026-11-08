@@ -761,6 +761,7 @@ fn run(c: &mut Box<dyn Conversation>, text: &str) -> Vec<AgentEvent> {
 
 #[test]
 fn anthropic_streaming_tool_loop_through_the_engine() {
+    let _memory = crate::model_info::test_lock();
     let turn1 = sse(&[
         json!({"type":"message_start","message":{"model":"claude-opus-5-5","usage":{"input_tokens":100,"output_tokens":1}}}),
         json!({"type":"ping"}),
@@ -788,6 +789,7 @@ fn anthropic_streaming_tool_loop_through_the_engine() {
         json!({"type":"message_stop"}),
     ]);
     let (url, seen) = mock(vec![(200, "text/event-stream", turn1), (200, "text/event-stream", turn2)]);
+    crate::model_info::forget(&url);
     let (h, _d) = hub();
     add(&h, "Claude", BackendKind::Anthropic, &url, Some("sk-test-123"));
     let mut c = h.start(None, true).unwrap();
@@ -847,6 +849,7 @@ fn anthropic_streaming_tool_loop_through_the_engine() {
 
 #[test]
 fn anthropic_refusal_and_http_errors() {
+    let _memory = crate::model_info::test_lock();
     let refusal = sse(&[
         json!({"type":"message_start","message":{"model":"claude-opus-5-5","usage":{"input_tokens":5}}}),
         json!({"type":"message_delta","delta":{"stop_reason":"refusal"},"usage":{"output_tokens":0}}),
@@ -856,6 +859,7 @@ fn anthropic_refusal_and_http_errors() {
         (200, "text/event-stream", refusal),
         (401, "application/json", r#"{"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}"#.into()),
     ]);
+    crate::model_info::forget(&url);
     let (h, _d) = hub();
     add(&h, "Claude", BackendKind::Anthropic, &url, Some("k"));
     let mut c = h.start(Some("Claude"), false).unwrap();
@@ -873,6 +877,7 @@ fn anthropic_refusal_and_http_errors() {
 /// before) and isn't asked for again on the next turn.
 #[test]
 fn a_turn_learns_the_models_capabilities_once() {
+    let _memory = crate::model_info::test_lock();
     let answer = || {
         sse(&[
             json!({"type":"message_start","message":{"model":"plain","usage":{"input_tokens":3}}}),
@@ -888,6 +893,7 @@ fn a_turn_learns_the_models_capabilities_once() {
     for listed in [true, false] {
         let list = if listed { (200, "application/json", models.to_string()) } else { (404, "application/json", r#"{"error":{"message":"no"}}"#.to_string()) };
         let (url, seen) = mock(vec![list, (200, "text/event-stream", answer()), (200, "text/event-stream", answer())]);
+        crate::model_info::forget(&url);
         let mut claude = anthropic::Anthropic::new(Some(&url), "sk-test".into(), "plain");
         assert!(!claude.learn_capabilities, "a stand-in address isn't asked unless told to");
         claude.learn_capabilities = true;
@@ -1276,6 +1282,7 @@ fn native_tool_calls_are_not_duplicated_by_json_text() {
 
 #[test]
 fn hub_config_keys_and_test_backend() {
+    let _memory = crate::model_info::test_lock();
     let t = sse(&[
         json!({"type":"message_start","message":{"model":"claude-haiku-5-5","usage":{"input_tokens":3}}}),
         json!({"type":"content_block_start","index":0,"content_block":{"type":"text","text":"ready"}}),
@@ -1284,6 +1291,7 @@ fn hub_config_keys_and_test_backend() {
     ]);
     let models = json!({"data":[{"id":"claude-opus-5-5"},{"id":"claude-haiku-5-5"}]}).to_string();
     let (url, seen) = mock(vec![(200, "text/event-stream", t), (200, "application/json", models.clone()), (200, "application/json", models)]);
+    crate::model_info::forget(&url);
     let (h, d) = hub();
     assert!(h.backends().is_empty());
     assert!(h.start(None, true).is_err());

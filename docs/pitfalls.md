@@ -450,6 +450,14 @@ Bedrock or Vertex answers 400 to it, and a proxy or gateway may too. A provider'
 vendor-specific field goes only to that provider's own address (here `is_anthropic_api`), and a
 test sends the same body to a stand-in address and checks it isn't there.
 
+**A retry that "made room" by a rule that could leave nothing to make.** After a reply filled the
+context window, the window was learned as input + output and the budget kept a quarter of it
+free; when the output was a quarter or more (140k in, 60k out of 200k), the budget was no smaller
+than the input, nothing was trimmed, and the same request was paid for twice under "making
+room". A retry meant to change something must be sure to change it: derive its limit from what
+failed (keep more than the output used free), and test with the failure's own numbers that the
+second request is smaller.
+
 **An early error without a terminal event.** Model validation returned after reporting an error,
 but headless chat waits for `TurnDone`, not just an idle worker. Preflight failures and cancellation
 must finish the event sequence too; regression tests check both the error/status and the terminal event.

@@ -29,9 +29,10 @@ pub fn stream_agent(body: Duration) -> ureq::Agent {
     agent(Duration::from_secs(15), Duration::from_secs(300), body)
 }
 
-/// The agent for quick calls (model lists, probes).
+/// The agent for quick calls (model lists, probes): `total` bounds each whole call, from
+/// connecting to the last byte of the answer.
 pub fn quick_agent(total: Duration) -> ureq::Agent {
-    agent(total, total, total)
+    ureq::Agent::config_builder().http_status_as_error(false).user_agent(USER_AGENT).timeout_global(Some(total)).build().new_agent()
 }
 
 fn net_error(what: &str, e: ureq::Error) -> ToolError {
@@ -186,7 +187,8 @@ pub fn get_json(agent: &ureq::Agent, what: &str, url: &str, headers: &[(&str, St
     let text = match resp.into_body().into_with_config().limit(MAX_JSON_BODY).read_to_string() {
         Ok(text) => text,
         Err(ureq::Error::BodyExceedsLimit(_)) => {
-            return Err(ToolError::new(ErrorCode::OverLimit, format!("{what} sent a larger answer than we read (over 8 MiB).")));
+            return Err(ToolError::new(ErrorCode::OverLimit, format!("{what} sent a larger answer than we read (over 8 MiB)."))
+                .with_remediation("The server's model list is unusually large; try again or check the address."));
         }
         Err(e) => return Err(net_error(what, e)),
     };
@@ -532,6 +534,37 @@ mod tests {
             Ok(_) => panic!("a rate limit is not a response stream"),
         };
         assert_eq!(crate::TurnFailure::from_api(&error), crate::TurnFailure { kind: crate::FailureKind::RateLimited, retry_after_secs: Some(7) });
+        server.join().unwrap();
+    }
+
+    /// A quick call's time is one deadline for the whole call: a server slow in each phase (no
+    /// phase as long as the limit, all of them together longer) is stopped, not waited out.
+    #[test]
+    fn a_quick_call_has_one_deadline_for_the_whole_call() {
+        use std::io::Write;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                    break;
+                }
+            }
+            std::thread::sleep(Duration::from_millis(700));
+            let body = r#"{"data":[]}"#;
+            let _ = write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len());
+            let _ = stream.flush();
+            std::thread::sleep(Duration::from_millis(700));
+            let _ = stream.write_all(body.as_bytes());
+        });
+        let started = std::time::Instant::now();
+        let error = get_json(&quick_agent(Duration::from_secs(1)), "Stand-in", &url, &[]).unwrap_err();
+        assert_eq!(error.code, ErrorCode::TimedOut, "{error:?}");
+        assert!(started.elapsed() < Duration::from_millis(1350), "{:?}", started.elapsed());
         server.join().unwrap();
     }
 }

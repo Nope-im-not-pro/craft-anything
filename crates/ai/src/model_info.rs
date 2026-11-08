@@ -113,6 +113,25 @@ pub fn recall(base_url: &str, model: &str) -> Known {
     MEMORY.lock().unwrap_or_else(PoisonError::into_inner).recall(base_url, model, Instant::now())
 }
 
+/// Held by tests whose stand-in server may get a port an earlier test's list is remembered
+/// under: the memory is process-wide, so each such test holds this while it runs and starts by
+/// forgetting its own address ([`forget`]).
+#[cfg(test)]
+static TEST_LOCK: Mutex<()> = Mutex::new(());
+
+/// Take the shared lock for a test that reads or writes the memory through a stand-in server.
+#[cfg(test)]
+pub(crate) fn test_lock() -> craft_anything_platform::sync::MutexGuard<'static, ()> {
+    TEST_LOCK.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Forget what is remembered under `base_url` (a stand-in server's reused port).
+#[cfg(test)]
+pub(crate) fn forget(base_url: &str) {
+    let base_url = key(base_url);
+    MEMORY.lock().unwrap_or_else(PoisonError::into_inner).0.retain(|r| r.base_url != base_url);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
