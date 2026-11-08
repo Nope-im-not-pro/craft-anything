@@ -63,7 +63,7 @@ fn the_claude_api_is_added_with_a_checked_key() {
     assert_eq!(added.key_stored_in.as_deref(), Some("file"));
     assert!(!serde_json::to_string(&added).unwrap().contains("sk-test-ok"));
     let seen = seen.lock().unwrap().clone();
-    assert_eq!(seen[0].path, "/v1/models");
+    assert_eq!(seen[0].path, "/v1/models?limit=1000");
     assert_eq!(seen[0].header("x-api-key"), Some("sk-test-ok"));
     assert_eq!(s.keys().get("Claude").as_deref(), Some("sk-test-ok"));
     let saved = AiConfig::from_settings(&Settings::load_from(&s.dir.path().join("config.toml")));
