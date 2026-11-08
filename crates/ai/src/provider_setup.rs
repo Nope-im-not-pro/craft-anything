@@ -183,6 +183,51 @@ fn refused(e: ToolError, who: &str, key_url: Option<&str>, key: Option<&str>) ->
     }
 }
 
+/// The provider offer whose own address a backend of `kind` at `base` uses, if any.
+pub fn own_offer(kind: BackendKind, base: Option<&str>) -> Option<ProviderOffer> {
+    let base = base.map(|b| b.trim().trim_end_matches('/')).filter(|b| !b.is_empty());
+    offers::offers().into_iter().find(|o| o.kind == kind && o.base_url.as_deref().map(|b| b.trim_end_matches('/')) == base)
+}
+
+/// An environment variable's value is sent with the key check and stored, so not every variable
+/// may be read: a provider's own (from its offer) only goes to that provider at its own address
+/// (`own`), and otherwise only a name ending in `_API_KEY` that isn't a provider's. Anything else
+/// (`GITHUB_TOKEN`) could be another secret. Checked before anything is read or sent.
+fn env_allowed(var: &str, own: Option<&ProviderOffer>) -> Result<(), ToolError> {
+    let upper = var.to_ascii_uppercase();
+    let is = |v: &String| v.eq_ignore_ascii_case(&upper);
+    if own.is_some_and(|o| o.key_env.iter().any(is)) {
+        return Ok(());
+    }
+    let fix = "Put the key in a variable named like MY_SERVER_API_KEY, or give it as `api_key` (`--key-stdin` in the CLI).";
+    if let Some(owner) = offers::offers().into_iter().find(|o| o.key_env.iter().any(is)) {
+        return Err(
+            ToolError::invalid(format!("{var} holds {}'s key, so it's only sent to {} at its own address.", owner.name, owner.name)).with_remediation(fix)
+        );
+    }
+    if !upper.ends_with("_API_KEY") {
+        return Err(
+            ToolError::invalid(format!("Only a variable whose name ends in _API_KEY is read for a key; {var} may hold another secret.")).with_remediation(fix)
+        );
+    }
+    Ok(())
+}
+
+/// A key read from the environment variable `var`, which must be one [`env_allowed`] lets go to
+/// where the key is sent (`own`: the provider at its own address, if that's where). Used by the
+/// tools' `api_key_env` and the CLI's `--key-env` alike.
+pub fn key_from_env(var: &str, own: Option<&ProviderOffer>) -> Result<String, ToolError> {
+    let var = var.trim();
+    if var.is_empty() || var.len() > 128 || !var.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        return Err(ToolError::invalid("The key's variable is the name of an environment variable, like ANTHROPIC_API_KEY."));
+    }
+    env_allowed(var, own)?;
+    std::env::var(var).ok().filter(|k| !k.trim().is_empty()).ok_or_else(|| {
+        ToolError::invalid(format!("The environment variable {var} isn't set where Craft Anything runs."))
+            .with_remediation("Set it before starting the app or the MCP server, or give the key another way.")
+    })
+}
+
 fn trimmed_key(key: Option<String>) -> Result<Option<String>, ToolError> {
     match key {
         Some(k) => {

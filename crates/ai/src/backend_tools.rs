@@ -157,53 +157,13 @@ pub struct KeyParams {
     pub check: Option<bool>,
 }
 
-/// The provider offer whose own address a backend of `kind` at `base` uses, if any.
-fn own_offer(kind: BackendKind, base: Option<&str>) -> Option<offers::ProviderOffer> {
-    let base = base.map(|b| b.trim().trim_end_matches('/')).filter(|b| !b.is_empty());
-    offers::offers().into_iter().find(|o| o.kind == kind && o.base_url.as_deref().map(|b| b.trim_end_matches('/')) == base)
-}
-
-/// An environment variable's value is sent with the key check and stored, so not every variable
-/// may be read: a provider's own (from its offer) only goes to that provider at its own address
-/// (`own`), and otherwise only a name ending in `_API_KEY` that isn't a provider's. Anything else
-/// (`GITHUB_TOKEN`) could be another secret. Checked before anything is read or sent.
-fn env_allowed(var: &str, own: Option<&offers::ProviderOffer>) -> Result<(), ToolError> {
-    let upper = var.to_ascii_uppercase();
-    let is = |v: &String| v.eq_ignore_ascii_case(&upper);
-    if own.is_some_and(|o| o.key_env.iter().any(is)) {
-        return Ok(());
-    }
-    let fix = "Put the key in a variable named like MY_SERVER_API_KEY, or give it as `api_key`.";
-    if let Some(owner) = offers::offers().into_iter().find(|o| o.key_env.iter().any(is)) {
-        return Err(
-            ToolError::invalid(format!("{var} holds {}'s key, so it's only sent to {} at its own address.", owner.name, owner.name)).with_remediation(fix)
-        );
-    }
-    if !upper.ends_with("_API_KEY") {
-        return Err(
-            ToolError::invalid(format!("Only a variable whose name ends in _API_KEY is read for a key; {var} may hold another secret.")).with_remediation(fix)
-        );
-    }
-    Ok(())
-}
-
 /// The key given as `api_key` or read from `api_key_env`; never both. `own` is the provider whose
-/// own address the key goes to, if any ([`env_allowed`]).
+/// own address the key goes to, if any ([`provider_setup::key_from_env`]).
 fn key_param(api_key: Option<String>, api_key_env: Option<&str>, own: Option<&offers::ProviderOffer>) -> Result<Option<String>, ToolError> {
     match (api_key, api_key_env.map(str::trim).filter(|v| !v.is_empty())) {
         (Some(_), Some(_)) => Err(ToolError::invalid("Give `api_key` or `api_key_env`, not both.")),
         (Some(k), None) => Ok(Some(k)),
-        (None, Some(var)) => {
-            if var.len() > 128 || !var.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
-                return Err(ToolError::invalid("`api_key_env` is the name of an environment variable, like ANTHROPIC_API_KEY."));
-            }
-            env_allowed(var, own)?;
-            match std::env::var(var).ok().filter(|k| !k.trim().is_empty()) {
-                Some(k) => Ok(Some(k)),
-                None => Err(ToolError::invalid(format!("The environment variable {var} isn't set where Craft Anything runs."))
-                    .with_remediation("Set it before starting the app or the MCP server, or give the key another way.")),
-            }
-        }
+        (None, Some(var)) => provider_setup::key_from_env(var, own).map(Some),
         (None, None) => Ok(None),
     }
 }
@@ -282,7 +242,8 @@ fn ai_backend_key_set(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOutput, To
     let check = p.check.unwrap_or(true);
     let cfg = AiConfig::from_table(&ctx.session.settings.ai)?;
     let entry = cfg.get(&p.name).ok_or_else(|| no_backend(&p.name))?;
-    let own = own_offer(entry.config.kind, entry.config.base_url.as_deref()).filter(|_| entry.config.ssh_host.as_deref().is_none_or(|h| h.trim().is_empty()));
+    let own = provider_setup::own_offer(entry.config.kind, entry.config.base_url.as_deref())
+        .filter(|_| entry.config.ssh_host.as_deref().is_none_or(|h| h.trim().is_empty()));
     let key = key_param(p.api_key, p.api_key_env.as_deref(), own.as_ref())?
         .ok_or_else(|| ToolError::invalid("Give the key as `api_key_env` (preferred) or `api_key`."))?;
     let key = provider_setup::prepare_key(entry, &key, check)?;

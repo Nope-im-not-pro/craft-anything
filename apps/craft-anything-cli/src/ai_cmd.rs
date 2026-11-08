@@ -3,7 +3,7 @@
 use crate::output::Format;
 use crate::{Cli, INTERRUPTED, emit, fail, make_engine, out};
 use clap::{Args, Subcommand};
-use craft_anything_ai::{AgentEvent, AiHub, BackendConfig, BackendKind, Effort, Locality};
+use craft_anything_ai::{AgentEvent, AiHub, BackendConfig, BackendEntry, BackendKind, BackendOptions, Effort, Locality, ProviderOffer, provider_setup};
 use craft_anything_evidence::ToolError;
 use serde_json::{Value, json};
 use std::io::{Read as _, Write as _};
@@ -56,8 +56,8 @@ pub enum AiCommand {
         /// Read the API key from stdin.
         #[arg(long)]
         key_stdin: bool,
-        /// With --provider: save without asking the provider anything (offline set-up).
-        #[arg(long, requires = "provider")]
+        /// Save the key without asking the provider or server anything (offline set-up).
+        #[arg(long)]
         no_check: bool,
         /// With --provider: replace a backend of the same name (its stored key is dropped unless a
         /// new one is given). Without it, a name already set up is refused.
@@ -221,9 +221,14 @@ pub fn chat(cli: &Cli, a: &ChatArgs) -> u8 {
     if stopped { 130 } else { code }
 }
 
-fn read_key(key_env: &Option<String>, key_stdin: bool) -> Result<Option<String>, String> {
+/// The key from `--key-env` or `--key-stdin`. A variable is read only when it may go where the key
+/// is sent (`own`: the provider at its own address), as for the tools' `api_key_env`.
+fn read_key(key_env: &Option<String>, key_stdin: bool, own: Option<&ProviderOffer>) -> Result<Option<String>, String> {
     if let Some(var) = key_env {
-        return std::env::var(var).map(Some).map_err(|_| format!("environment variable {var} is not set"));
+        return provider_setup::key_from_env(var, own).map(Some).map_err(|e| match e.remediation {
+            Some(fix) => format!("{} {fix}", e.message),
+            None => e.message,
+        });
     }
     if key_stdin {
         let mut s = String::new();
@@ -271,7 +276,13 @@ pub fn ai(cli: &Cli, c: &AiCommand, f: Format) -> u8 {
             0
         }
         AiCommand::Key { name, key_env, key_stdin, no_check } => {
-            let key = match read_key(key_env, *key_stdin) {
+            // A provider's own variable only for a saved AI at that provider's own address.
+            let own = hub
+                .backends()
+                .into_iter()
+                .find(|b| &b.name == name && b.ssh_host.as_deref().is_none_or(|h| h.trim().is_empty()))
+                .and_then(|b| provider_setup::own_offer(b.kind, b.base_url.as_deref()));
+            let key = match read_key(key_env, *key_stdin, own.as_ref()) {
                 Ok(Some(k)) => k,
                 Ok(None) => return crate::usage_error("give the key with --key-env or --key-stdin"),
                 Err(m) => return crate::usage_error(&m),
@@ -285,7 +296,9 @@ pub fn ai(cli: &Cli, c: &AiCommand, f: Format) -> u8 {
             }
         }
         AiCommand::Add { name, kind, provider, model, base_url, ssh_host, key_env, key_stdin, no_check, replace } => {
-            let key = match read_key(key_env, *key_stdin) {
+            // A provider's own variable only when the key goes to that provider at its own address.
+            let own = provider.as_deref().filter(|_| base_url.is_none()).and_then(|id| hub.offers().into_iter().find(|o| o.id == id));
+            let key = match read_key(key_env, *key_stdin, own.as_ref()) {
                 Ok(k) => k,
                 Err(m) => return crate::usage_error(&m),
             };
@@ -316,6 +329,14 @@ pub fn ai(cli: &Cli, c: &AiCommand, f: Format) -> u8 {
             }
             let model = model.clone().or_else(|| kind.suggested_models().first().map(|m| m.to_string())).unwrap_or_default();
             let cfg = BackendConfig { name: name.clone(), kind, model, base_url: base_url.clone(), ssh_host: ssh_host.clone(), enabled: true };
+            // A key is checked before anything is saved, as with --provider: a rejected key saves nothing.
+            let key = match key {
+                Some(k) => match provider_setup::prepare_key(&BackendEntry { config: cfg.clone(), options: BackendOptions::default() }, &k, !no_check) {
+                    Ok(k) => Some(k),
+                    Err(e) => return fail(&e, f),
+                },
+                None => None,
+            };
             match hub.add_backend(cfg.clone(), key) {
                 Ok(()) => {
                     emit(&json!({"added": cfg}), f);

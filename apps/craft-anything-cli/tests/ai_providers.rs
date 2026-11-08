@@ -7,14 +7,54 @@ use serde_json::Value;
 use std::time::Duration;
 
 fn cli(args: &[&str], config: &std::path::Path, stdin: &[u8]) -> Output {
-    Process::new(env!("CARGO_BIN_EXE_craft-anything-cli"))
+    cli_env(args, config, stdin, &[])
+}
+
+fn cli_env(args: &[&str], config: &std::path::Path, stdin: &[u8], env: &[(&str, &str)]) -> Output {
+    let mut p = Process::new(env!("CARGO_BIN_EXE_craft-anything-cli"))
         .args(args)
         .env("CRAFT_ANYTHING_CONFIG_DIR", config)
         .env("CRAFT_ANYTHING_NO_KEYCHAIN", "1")
         .stdin_bytes(stdin.to_vec())
-        .timeout(Duration::from_secs(60))
-        .run()
-        .unwrap()
+        .timeout(Duration::from_secs(60));
+    for (k, v) in env {
+        p = p.env(k, v);
+    }
+    p.run().unwrap()
+}
+
+#[test]
+fn a_key_added_by_kind_is_checked_and_only_key_variables_are_read() {
+    let cfg = tempfile::tempdir().unwrap();
+    let names = |cfg: &std::path::Path| std::fs::read_to_string(cfg.join("config.toml")).unwrap_or_default();
+    let server = ["ai", "add", "Box", "--kind", "openai_compatible", "--base-url", "http://127.0.0.1:0/v1", "--model", "m"];
+
+    // A key given by kind is checked first: no answer saves nothing; --no-check saves it.
+    let out = cli(&[&server[..], &["--key-stdin"]].concat(), cfg.path(), b"sk-test-box");
+    assert!(!out.success, "{}", String::from_utf8_lossy(&out.stdout));
+    assert!(!names(cfg.path()).contains("Box") && !cfg.path().join("ai-keys.toml").exists());
+
+    // A variable that isn't a key, or a provider's key sent elsewhere, is never read.
+    let env = [("GITHUB_TOKEN", "ghp_fake"), ("OPENAI_API_KEY", "sk-test-openai"), ("BOX_API_KEY", "sk-test-box")];
+    for var in ["GITHUB_TOKEN", "OPENAI_API_KEY"] {
+        let out = cli_env(&[&server[..], &["--key-env", var, "--no-check"]].concat(), cfg.path(), b"", &env);
+        assert_eq!(out.code, Some(2), "{var}: {}", String::from_utf8_lossy(&out.stdout));
+        assert!(String::from_utf8_lossy(&out.stderr).contains(var));
+    }
+    let out = cli_env(
+        &["ai", "add", "C", "--provider", "anthropic", "--base-url", "http://127.0.0.1:0", "--key-env", "ANTHROPIC_API_KEY", "--no-check"],
+        cfg.path(),
+        b"",
+        &[("ANTHROPIC_API_KEY", "sk-test-ant")],
+    );
+    assert_eq!(out.code, Some(2), "a provider's variable stays with its own address");
+    assert!(!names(cfg.path()).contains("Box") && !cfg.path().join("ai-keys.toml").exists());
+
+    assert!(cli_env(&[&server[..], &["--key-env", "BOX_API_KEY", "--no-check"]].concat(), cfg.path(), b"", &env).success);
+    assert!(std::fs::read_to_string(cfg.path().join("ai-keys.toml")).unwrap().contains("Box = \"sk-test-box\""));
+    let out = cli_env(&["ai", "add", "O", "--provider", "openai", "--key-env", "OPENAI_API_KEY", "--no-check"], cfg.path(), b"", &env);
+    assert!(out.success, "a provider's own variable at its own address: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(!String::from_utf8_lossy(&out.stdout).contains("sk-test"));
 }
 
 #[test]
