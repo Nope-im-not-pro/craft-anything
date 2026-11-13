@@ -18,7 +18,7 @@ pub fn builtin(model: &str) -> Option<Price> {
         // and prompt-caching pages, checked 2026-11-07).
         "claude-sonnet-5-5" => p(2.0, 10.0, 0.10),
         // Haiku 5.5's rate up to 100k input tokens; above that it is 0.50 / 2.50 / 0.05, which a
-        // single-tier price can't hold yet (R2.11, prices by provider and model).
+        // single-tier price can't hold yet (R2.15, prices by provider and model).
         "claude-haiku-5-5" => p(0.10, 0.50, 0.01),
         "claude-fable-5-1" => p(10.0, 50.0, 0.25),
         "claude-opus-5" => p(5.0, 25.0, 0.50),
