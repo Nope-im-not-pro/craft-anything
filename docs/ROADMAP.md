@@ -85,8 +85,8 @@ Issues are ranked by people affected and how badly, after leaving out what's alr
 | 3 | R2.4 Runtime study, R2.5 Behaviour checks | scripted input (R2.4) before R2.5's sheet check | Makes "ready" mean more for apps and games |
 | 3 | R2.7, R2.8 | — | Small gaps left in finished work |
 | 3 | R2.9 Everyday use, R2.10 Pinned builds | — | Open to anyone at any time; most lines stand alone |
-| 3 Depth | R2.11 Providers as data | R5.8 | Each new provider becomes one row instead of six edits |
-| 3 | R2.12 More providers | R2.11 | Small additions once the table exists |
+| 3 Depth | R2.15 Providers as data | R5.8 | Each new provider becomes one row instead of six edits |
+| 3 | R2.16 More providers | R2.15 | Small additions once the table exists |
 | 3 | R1.5 | — | Small leftovers |
 | Any | M3: R3.3, R3.9, R3.11 | — | Open lane |
 | Later | R4.1 macOS CLI, R4.2 Managed tier | **decision** | Not before M5 |
@@ -570,10 +570,11 @@ yet, and the quick start is how every new person begins.
       HAR so far); GraphQL and tRPC on real bundles (only hand-written minified shapes)
 - [ ] Check the Kimi Code, Factory Droid and WorkBuddy registrations in the real apps
 - [ ] The Claude API added in Settings with no environment variable: chat with a tool call, cost
-      against the console, cached tokens on turn two; then a small build to Ready
+      against the console, cached tokens on turn two; then a small build to Ready — waits for
+      R5.8's "Add a provider" in Settings
 - [ ] 9router 0.5.112 or later: found without a key and with `REQUIRE_API_KEY=true`; a `cc/` model
       and a combo chat; a tool call; a build to Ready; the no-provider error; token saver off in its
-      request log
+      request log — waits for R5.8's 9router and token-saver lines
 
 ### R5.8 The Claude API and 9router can be picked
 Owner: open · Status: todo
@@ -1121,7 +1122,7 @@ to the project next.
 - [ ] Opening a pin that's already running brings its window to the front, instead of a message
 - [ ] How much space pins take in Settings
 
-### R2.11 Providers as data
+### R2.15 Providers as data
 Owner: open · Status: todo
 Provider facts live in six places (`BackendKind` arms, `keys::env_var`, `detect::env_keys`,
 `PROVIDERS`, `LOCAL_SERVERS`, `AiHub`'s matches); `catalog_id` is never read.
@@ -1140,7 +1141,7 @@ Provider facts live in six places (`BackendKind` arms, `keys::env_var`, `detect:
 - [ ] A cached models.dev catalogue, refreshed only on request (`ai_catalog_refresh`, never at
       start-up; a versioned file; used only for fields that are unknown) (decided: yes, opt-in only)
 
-### R2.12 More providers
+### R2.16 More providers
 Owner: open · Status: todo
 - [ ] Cerebras, NVIDIA, Hugging Face, SambaNova, Cohere rows
 - [ ] LiteLLM proxy (port 4000, gateway) and Jan (1337); optional keys for LM Studio, llama.cpp, vLLM
@@ -1365,4 +1366,4 @@ Looked at and not committed to; none of this is open work. Say in the issue if y
   (#175), an HTTPS intercepting proxy (#164), VM and Windows Sandbox detonation (#144, #163), an
   adapter for another disassembler (#147)
 - More agents (#14, #63, #97, #162, #170, #186, #206, #470): R2.2's table comes first; providers
-  moved to R2.11/R2.12
+  moved to R2.15/R2.16
